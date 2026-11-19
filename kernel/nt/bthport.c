@@ -196,6 +196,8 @@ typedef struct {                       /* a service PDO's extension */
     UINT16    uuid;
     bool      listed;                  /* (in the bus's relations) */
     bool      gone;                    /* (surprise removal: the radio or the bus went) */
+    volatile bool off;                 /* (its service is going off or the device is being forgotten:
+                                        * HID's driver may no longer touch the link) */
     BthChan  *ctrl, *intr;
     BthHidInput input;
     void     *ctx;
@@ -413,6 +415,7 @@ static NT_STATUS acl_send(BthRadio *r, BthDev *d, const UINT8 *frame, UINT32 len
     for (UINT32 off = 0; off < len && NT_SUCCESS(st); ) {
         UINT32 n = len - off < r->acl_mtu ? len - off : r->acl_mtu;
         if (!WAIT_FOR(r, __atomic_load_n(&r->acl_free, __ATOMIC_ACQUIRE) > 0, 2000)) { st = ST_IO_TIMEOUT; break; }
+        if (d->conn != 2 || r->gone) { st = ST_DEVICE_NOT_CONNECTED; break; }   /* (its buffer not spent: nothing sent) */
         __atomic_fetch_sub(&r->acl_free, 1, __ATOMIC_ACQ_REL);
         put16(pkt, (UINT16)(d->handle | (off ? 0x1000 : 0x2000)));   /* (packet boundary: first, or continuing) */
         put16(pkt + 2, (UINT16)n);
@@ -663,7 +666,9 @@ static BthChan *l2_open_rx(BthRadio *r, BthDev *d, UINT16 psm, BthRx rx, void *c
     char t[18];
     if (NT_SUCCESS(sig_send(r, d, 0x02, c->ident, b, 4)) && WAIT_FOR(r, c->state == 3 || c->state == 0, 5000) && c->state == 3)
         return c;
-    kprintf("[BTH] %s: L2CAP PSM %04x did not open (result %04x)\n", addr_text(d->addr, t), psm, c->result);
+    kprintf("[BTH] %s: L2CAP PSM %04x did not open (result %04x, state %d%s%s, %d ACL buffer(s) free)\n", addr_text(d->addr, t),
+            psm, c->result, c->state, c->cfg_in ? ", its configuration in" : "", c->cfg_out ? ", ours answered" : "",
+            __atomic_load_n(&r->acl_free, __ATOMIC_ACQUIRE));
     chan_free(r, c);
     return NULL;
 }
@@ -781,7 +786,18 @@ static void on_event(BthRadio *r, UINT8 code, const UINT8 *p, UINT32 n)
         d->name_req = 2;
         break;
     case 0x03:                                                  /* Connection Complete */
-        if (n < 11 || !(d = dev_find(r, p + 3)) || d->conn != 1) break;
+        if (n < 11) break;
+        if (!(d = dev_find(r, p + 3)) || d->conn != 1) {
+            /* (a link nobody waits for any more, as one a device's
+             * forgotten connect asked for: closed, or the next Create
+             * Connection to it fails with 0x0B, "already exists") */
+            if (p[0]) break;
+            memcpy(b, p + 1, 2);
+            b[2] = 0x13;
+            send_cmd(r, 0x0406, b, 3);
+            kprintf("[BTH] %s: a link nobody waits for (handle %03x): closed\n", addr_text(p + 3, t), le16(p + 1) & 0x0FFF);
+            break;
+        }
         d->conn_status = p[0];
         d->handle = le16(p + 1) & 0x0FFF;
         d->rx_len = 0;
@@ -1348,7 +1364,25 @@ NT_STATUS BthServiceDispatch(NT_DEVICE_OBJECT *pdo, NT_IRP *irp)
 static SvcPdo *hid_svc(NT_DEVICE_OBJECT *pdo)
 {
     SvcPdo *s = BthIsServicePdo(pdo) && svc(pdo)->uuid == UUID_HID ? svc(pdo) : NULL;
-    return s && s->listed && !s->gone && s->dev->hid_pdo == pdo ? s : NULL;
+    return s && s->listed && !s->gone && !s->off && s->dev->hid_pdo == pdo ? s : NULL;
+}
+
+static void hid_close(SvcPdo *s)
+{
+    if (s->intr) { s->intr->rx = NULL; l2_close(s->r, s->intr); s->intr = NULL; }
+    if (s->ctrl) { l2_close(s->r, s->ctrl); s->ctrl = NULL; }
+}
+
+/* The device's HID node no longer its own, then its channels closed: its
+ * driver, which sees them close and connects again, is refused from the
+ * start, so it neither reconnects a device about to be forgotten nor
+ * touches the next link (a new pairing's) */
+static void hid_stop(BthDev *d)
+{
+    if (!d->hid_pdo) return;
+    SvcPdo *s = svc(d->hid_pdo);
+    __atomic_store_n(&s->off, true, __ATOMIC_RELEASE);
+    hid_close(s);
 }
 
 bool BthHidGetInfo(NT_DEVICE_OBJECT *pdo, BthHidInfo *out)
@@ -1410,9 +1444,7 @@ NT_STATUS BthHidSend(NT_DEVICE_OBJECT *pdo, bool intr, const UINT8 *data, UINT32
 void BthHidDisconnect(NT_DEVICE_OBJECT *pdo)
 {
     SvcPdo *s = hid_svc(pdo);
-    if (!s) return;
-    if (s->intr) { s->intr->rx = NULL; l2_close(s->r, s->intr); s->intr = NULL; }
-    if (s->ctrl) { l2_close(s->r, s->ctrl); s->ctrl = NULL; }
+    if (s) hid_close(s);
 }
 
 bool BthHidConnected(NT_DEVICE_OBJECT *pdo)
@@ -1696,7 +1728,7 @@ static NT_STATUS forget(BthRadio *r, BthDev *d)
 {
     char path[160], a[13];
     if (d->hid_pdo) {
-        BthHidDisconnect(d->hid_pdo);
+        hid_stop(d);
         d->hid_on = false;
         hid_node(r, d);
     }
@@ -1736,7 +1768,7 @@ static NT_STATUS set_service(BthRadio *r, BthDev *d, UINT16 uuid, bool enable)
     }
     if (uuid != UUID_HID) return NT_STATUS_NOT_SUPPORTED;      /* (no driver for the others yet) */
     if (!d->rdesc_len) return NT_STATUS_UNSUCCESSFUL;
-    if (!enable && d->hid_pdo) BthHidDisconnect(d->hid_pdo);
+    if (!enable) hid_stop(d);
     d->hid_on = enable;
     lock(r);
     dev_save(r, d);

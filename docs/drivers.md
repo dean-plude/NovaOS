@@ -507,6 +507,10 @@ by the stored link key. A connect that is still waiting for the link to
 authenticate or encrypt gives up as soon as that link drops, or the service
 goes off, or the device is forgotten: it never takes the next link's
 answers (a new pairing's, from Settings) as its own, nor closes that link.
+Switching the service off or forgetting the device first takes the node
+away from `hidbth`, then closes its channels, so `hidbth` (which reconnects
+when it sees them close) is refused instead of connecting again; a link the
+controller completes that no one waits for any more is disconnected at once.
 
 A vendor's radio package is installed as on Windows: the inbox
 `bth.inf` has the `BthUsb.NT`, `.HW` and `.Services` sections that

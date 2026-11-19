@@ -1967,5 +1967,26 @@ vendors.
    `ListView` from markup over `ListViewBase` and `Selector`, its two
    items, `SelectionMode` `Single`, `SelectedIndex` -1).
 
+   Pulsar item 3, twenty-eighth slice: gradients.  Calculator's page paints
+   with `LinearGradientBrush`es, whose constructor was an unbuilt
+   stand-in.  Vendored and built from microsoft-ui-xaml 866ba81:
+   `GradientBrush`, `GradientStop`, `GradientStopCollection` and
+   `LinearGradientBrush` (generated classes, the brush's partial one) and
+   their core halves in `components/brushes` (`CLinearGradientBrush`'s
+   composition brush, the stops it copies into it, and the map of brushes
+   it keeps per element size).  One NovaOS change made them compile:
+   NovaOS's WRL `HString::Concat` takes a string reference too, as the
+   Windows SDK's does.  The core draws the brush as a
+   `CompositionLinearGradientBrush`, which `dcomp.dll` did not make, so
+   its compositor now does (`ICompositor4`'s `CreateLinearGradientBrush`
+   and `CreateColorGradientStop`): the stops in a `ColorStops` collection
+   (`IVector<CompositionColorGradientStop>`), interpolated in sRGB,
+   `StartPoint` and `EndPoint` relative or absolute (`MappingMode`), the
+   brush's transform, and `Clamp`, `Wrap` and `Mirror`.  Calculator's
+   page gets past its gradients and stops next at `ItemsStackPanel`.
+   Tests: `wuxamltest` (a `LinearGradientBrush` from markup, its
+   `EndPoint` and two `GradientStop`s read back) and `comptest` (a
+   gradient from red to blue across a sprite, then mirrored).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

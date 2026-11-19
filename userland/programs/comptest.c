@@ -291,6 +291,54 @@ static int waits(HANDLE ev)
     return 0;
 }
 
+/* a linear gradient brush (ICompositor4) with two colour stops in its
+ * ColorStops (IVector<CompositionColorGradientStop>): red to blue across a
+ * sprite, then mirrored past half way (Pulsar 3 part 28) */
+static const GUID IID_ICompositor4_T = { 0xAE47E78A, 0x7910, 0x4425, { 0xA4, 0x82, 0xA0, 0x5B, 0x75, 0x8A, 0xDC, 0xE9 } };
+static const GUID IID_ICompositionGradientBrush_T = { 0x1D9709E0, 0xFFC6, 0x4C0E, { 0xA9, 0xAB, 0x34, 0x14, 0x4D, 0x4C, 0x90, 0x98 } };
+static const GUID IID_IVectorStop_T = { 0xBF2E107E, 0xF3DB, 0x56CD, { 0x91, 0xED, 0xC1, 0x12, 0x94, 0x06, 0xD5, 0x52 } };
+static void gradient(void *children)
+{
+    void *c4 = qi(g_comp, &IID_ICompositor4_T), *lin = 0, *grad = 0, *coll = 0, *stops = 0, *red = 0, *blue = 0, *s = 0, *v = 0;
+    CHECK("ICompositor4", c4 != 0);
+    if (!c4) return;
+    typedef HRESULT (STDMETHODCALLTYPE *Stop_t)(void *, float, Color, void **);
+    typedef HRESULT (STDMETHODCALLTYPE *Vec2_t)(void *, Vec2);
+    Color r = { 255, 255, 0, 0 }, b = { 255, 0, 0, 255 };
+    VT(c4, 7, Stop_t)(c4, 0.0f, r, &red);                                   /* CreateColorGradientStopWithOffsetAndColor */
+    VT(c4, 7, Stop_t)(c4, 1.0f, b, &blue);
+    VT(c4, 8, Get_t)(c4, &lin);                                             /* CreateLinearGradientBrush */
+    CHECK("CreateColorGradientStopWithOffsetAndColor, CreateLinearGradientBrush", red && blue && lin);
+    grad = qi(lin, &IID_ICompositionGradientBrush_T);
+    if (grad) VT(grad, 10, Get_t)(grad, &coll);                             /* ColorStops */
+    stops = qi(coll, &IID_IVectorStop_T);
+    CHECK("ColorStops: an IVector<CompositionColorGradientStop>", stops != 0);
+    UINT32 n = 0;
+    if (stops) {
+        VT(stops, 13, Put_t)(stops, red);                                   /* Append */
+        VT(stops, 13, Put_t)(stops, blue);
+        VT(stops, 7, Get_t)(stops, &n);                                     /* Size */
+    }
+    CHECK("Append: two stops", n == 2);
+    VT(g_comp, C_SPRITE, Get_t)(g_comp, &s);
+    if (s) { VT(s, 7, Put_t)(s, lin); VT(s, 0, QI_t)(s, &IID_IVisual_T, &v); }
+    if (v) {
+        Vec2 size = { 256, 20 };
+        VT(v, V_SIZE, Vec2_t)(v, size);
+        VT(children, VC_INSERT_TOP, Put_t)(children, v);
+    }
+    CHECK("red to blue (StartPoint (0, 0) to EndPoint (1, 0), relative)",
+          shows(1, 10, RGB(255, 0, 0)) && shows(128, 10, RGB(127, 0, 128)) && shows(254, 10, RGB(0, 0, 255)) &&
+          shows(300, 10, RGB(255, 255, 255)));
+    Vec2 half = { 0.5f, 0 };
+    if (lin) VT(lin, 7, Vec2_t)(lin, half);                                 /* put_EndPoint */
+    if (grad) VT(grad, 12, HRESULT (STDMETHODCALLTYPE *)(void *, int))(grad, 2);   /* put_ExtendMode: Mirror */
+    CHECK("EndPoint (0.5, 0), Mirror: blue at half way, back to red at the end",
+          shows(127, 10, RGB(0, 0, 255)) && shows(192, 10, RGB(127, 0, 128)) && shows(254, 10, RGB(255, 0, 0)));
+    if (v) VT(children, VC_REMOVE, Put_t)(children, v);
+    RELEASE(v); RELEASE(s); RELEASE(stops); RELEASE(coll); RELEASE(grad); RELEASE(lin); RELEASE(red); RELEASE(blue); RELEASE(c4);
+}
+
 static void versions(void *children)
 {
     /* the compositor's interfaces, in both namespaces */
@@ -604,6 +652,7 @@ int main(void)
     VT(children, VC_COUNT, Get_t)(children, &n);
     CHECK("RemoveAll: none left, the background again", n == 0 && shows(50, 50, RGB(255, 255, 255)) && shows(100, 100, RGB(255, 255, 255)));
 
+    gradient(children);
     versions(children);
 
     RELEASE(a); RELEASE(b); RELEASE(c); RELEASE(d); RELEASE(e); RELEASE(hid); RELEASE(j); RELEASE(g); RELEASE(f); RELEASE(f_kids);

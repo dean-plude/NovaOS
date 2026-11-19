@@ -1798,6 +1798,19 @@ FILE_FIRST['ListViewBase_Partial_Serialization.cpp'] = ('windows.storage.streams
 # (and its incremental loading names IAsyncInfo bare, as the Windows SDK lets it)
 for _f in ('incrementalloading.cpp', 'ListViewBase_Partial_DataVirtualization.cpp'):
     FILE_FIRST[_f] = ('nova_async_info.h',)
+# (step 32.6, the gradients a page's markup paints with, Calculator's
+# (Pulsar item 3, slice 28): the linear gradient brush, over its base
+# GradientBrush, with its gradient stops and their collection, each its
+# generated class, the brush's partial one, and their core halves
+# (components/brushes' CLinearGradientBrush, CGradientStop and
+# CGradientStopCollection's composition parts, and the map of composition
+# brushes it keeps per element size), which dcomp.dll's composition linear
+# gradient brush draws)
+_GRADIENTS = ('GradientBrush', 'GradientStop', 'GradientStopCollection', 'LinearGradientBrush')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += ('../LinearGradientBrush_Partial.cpp',) + \
+    tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _GRADIENTS)
+CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('../LinearGradientBrush.cpp',
+                                                                             '../LinearGradientBrushMap.cpp')
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

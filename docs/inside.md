@@ -254,7 +254,7 @@ file, not this page ([CONTRIBUTING.md](../CONTRIBUTING.md)).
     `EnteredBackground`, `LeavingBackground`), frozen while suspended (its
     threads stopped in the kernel until the window is restored); DXGI swap chains present into a CoreWindow) and
     `Windows.UI.Composition` in `dcomp` (the `Compositor`, container and
-    sprite visuals, colour and surface brushes, drawing surfaces on
+    sprite visuals, colour, surface and linear gradient brushes, drawing surfaces on
     Direct3D 11, targets on a window or a CoreWindow, property sets, key
     frame animations and batches, answering the Windows App SDK's
     `Microsoft.UI.Composition` IIDs as well), the first steps

@@ -30,6 +30,9 @@
  *   - a ListView from markup (Calculator's history and memory lists),
  *     made over ListViewBase, Selector and the ItemsControl, its two
  *     string items in its Items, nothing selected (SelectedIndex -1);
+ *   - a LinearGradientBrush from markup (Calculator's backgrounds), its
+ *     EndPoint and its two GradientStops read back through Windows'
+ *     ILinearGradientBrush, IGradientBrush and IGradientStop;
  *   - the automation peers FrameworkElementAutomationPeer's statics make
  *     for the page's text block and button (TextBlockAutomationPeer,
  *     ButtonAutomationPeer), the same one from FromElement after, and the
@@ -885,6 +888,37 @@ static void list_view_checks()
           SUCCEEDED(selector->get_SelectedIndex(&selected)) && selected == -1);
 }
 
+/* a LinearGradientBrush from markup, as Calculator's page paints with: its
+ * EndPoint and its two GradientStops (their Offset and Color) read back */
+static void gradient_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> brushObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<LinearGradientBrush " XMLNS L"StartPoint='0,0' EndPoint='0.5,1'>"
+                                                    L"<GradientStop Color='Red' Offset='0'/>"
+                                                    L"<GradientStop Color='Blue' Offset='0.75'/>"
+                                                    L"</LinearGradientBrush>").Get(),
+                     brushObject.GetAddressOf()) : E_FAIL;
+    CHECK("a LinearGradientBrush with two GradientStops from markup", SUCCEEDED(hr) && brushObject);
+    ctl::ComPtr<wux::Media::ILinearGradientBrush> linear;
+    ctl::ComPtr<wux::Media::IGradientBrush> gradient;
+    ABI::Windows::Foundation::Point end = {};
+    CHECK("it is Windows' LinearGradientBrush over GradientBrush, its EndPoint (0.5, 1)", brushObject &&
+          SUCCEEDED(brushObject.As(&linear)) && SUCCEEDED(brushObject.As(&gradient)) &&
+          SUCCEEDED(linear->get_EndPoint(&end)) && end.X == 0.5f && end.Y == 1.0f);
+    ctl::ComPtr<ABI::Windows::Foundation::Collections::IVector<wux::Media::GradientStop *>> stops;
+    ctl::ComPtr<wux::Media::IGradientStop> second;
+    unsigned int count = 0;
+    DOUBLE offset = 0;
+    ABI::Windows::UI::Color color = {};
+    CHECK("its GradientStops: two, the second blue at 0.75", gradient &&
+          SUCCEEDED(gradient->get_GradientStops(stops.GetAddressOf())) && stops &&
+          SUCCEEDED(stops->get_Size(&count)) && count == 2 && SUCCEEDED(stops->GetAt(1, second.GetAddressOf())) &&
+          SUCCEEDED(second->get_Offset(&offset)) && offset == 0.75 && SUCCEEDED(second->get_Color(&color)) &&
+          color.A == 255 && color.R == 0 && color.G == 0 && color.B == 255);
+}
+
 /* a MenuFlyout from markup, as Calculator's history and memory lists hold
  * their context menus in their resources: the flyout, its items (an item, a
  * separator and a toggle item) in its Items, the first item's Text */
@@ -957,6 +991,7 @@ public:
         pivot_checks();
         menu_flyout_checks();
         list_view_checks();
+        gradient_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

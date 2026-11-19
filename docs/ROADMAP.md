@@ -1690,6 +1690,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   stops next at a `LinearGradientBrush`, which NovaOS does not build yet.
   Next: `LinearGradientBrush`, then the CI check that Calculator computes
   `2 + 2`, which ticks this step.
+  Thirty-fourth part done (Pulsar item 3, twenty-eighth slice): the
+  framework's `LinearGradientBrush` with its `GradientStop`s, built for
+  Calculator's page, and `dcomp.dll`'s composition linear gradient brush
+  that draws it.  Tests `wuxamltest` and `comptest`.  Calculator's page
+  gets past its gradients and stops next at an `ItemsStackPanel`, the
+  panel a list lays its items out in, which NovaOS does not build yet.
+  Next: `ItemsStackPanel`, then the CI check that Calculator computes
+  `2 + 2`, which ticks this step.
 
 ---
 

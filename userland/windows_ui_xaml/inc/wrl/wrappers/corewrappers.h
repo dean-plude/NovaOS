@@ -85,6 +85,16 @@ public:
         if (SUCCEEDED(hr)) newString.Take(h);
         return hr;
     }
+    /* (and a string reference's, as the Windows SDK's overload takes:
+     * LinearGradientBrush.cpp's expression animations) */
+    template <class Ref>
+    HRESULT Concat(const Ref &str, HString &newString) const throw()
+    {
+        HSTRING h = nullptr;
+        HRESULT hr = ::WindowsConcatString(hstr_, str.Get(), &h);
+        if (SUCCEEDED(hr)) newString.Take(h);
+        return hr;
+    }
     HRESULT TrimStart(const HString &trim, HString &newString) const throw()
     {
         HSTRING h = nullptr;

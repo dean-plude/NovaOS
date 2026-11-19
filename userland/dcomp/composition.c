@@ -10,8 +10,9 @@
  * offset, size, anchor and centre points, scale, rotation (about the Z
  * axis), 2-D transform matrix, opacity, visibility and inset clip, and a
  * visual collection (InsertAtTop/AtBottom/Above/Below, Remove, RemoveAll);
- * colour brushes and surface brushes (stretch None, Fill, Uniform and
- * UniformToFill with alignment ratios); targets on a window (the desktop
+ * colour brushes, surface brushes (stretch None, Fill, Uniform and
+ * UniformToFill with alignment ratios) and linear gradient brushes with
+ * their colour stops (ICompositor4); targets on a window (the desktop
  * target, ICompositorDesktopInterop) or on the thread's CoreWindow
  * (CreateTargetForCurrentView); graphics devices
  * (ICompositorInterop::CreateGraphicsDevice, on a Direct3D 11 device or
@@ -60,7 +61,8 @@
  * Not implemented: expression animations' expressions other than
  * "name.Property" (they are accepted, held on their property and stopped,
  * not evaluated), starting implicit animations, effects, lights, shadows, dashed strokes,
- * gradient and other brushes, brushes' and clips' AnchorPoint, perspective and 3-D rotation (only the
+ * radial gradient and other brushes, gradient interpolation in linear
+ * colour space (InterpolationSpace is kept), brushes' and clips' AnchorPoint, perspective and 3-D rotation (only the
  * matrix's 2-D part and the Z rotation are used), clips other than inset
  * and square-cornered rectangle clips (and a clip under a rotation is its
  * bounding box), bilinear sampling and surfaces from handles.
@@ -160,7 +162,7 @@ typedef struct { float a, b, c, d, tx, ty; } Aff;   /* [x y 1] * [a b; c d; tx t
 enum { K_COMPOSITOR, K_CONTAINER, K_SPRITE, K_COLLECTION, K_COLOR_BRUSH, K_SURFACE_BRUSH, K_INSET_CLIP,
        K_TARGET, K_GRAPHICS, K_DRAWING_SURFACE, K_CHAIN_SURFACE, K_RECT_CLIP, K_PROPSET, K_EXPRESSION, K_KEYFRAME,
        K_GROUP, K_EASING, K_BATCH, K_BATCH_ARGS, K_MASK_BRUSH, K_NINEGRID_BRUSH, K_SPRITE_SHAPE, K_CONTAINER_SHAPE, K_GEOMETRY, K_PATH,
-       K_VIEWBOX, K_SHAPES, K_SHAPE_ITER, K_CONTROLLER, K_IMPLICIT, K_COUNT };
+       K_VIEWBOX, K_SHAPES, K_SHAPE_ITER, K_CONTROLLER, K_IMPLICIT, K_GRADIENT_BRUSH, K_GRADIENT_STOP, K_COUNT };
 /* a geometry's kind (G_*) */
 enum { G_ELLIPSE, G_RECT, G_RRECT, G_LINE, G_PATH };
 #define NIF 18
@@ -291,6 +293,12 @@ struct Obj {
     float progress, rate;
     int progress_behavior;
     boolean_t paused;
+    /* linear gradient brushes (their colour stops are in shapes, nshapes):
+     * StartPoint, EndPoint, ExtendMode, MappingMode (0 absolute, 1 relative),
+     * InterpolationSpace (kept); a colour stop's Offset (its Color is color) */
+    Vec2 g_start, g_end;
+    int extend, mapping, space;
+    float stop_at;
 };
 #define OBJ_AT(p, i) ((Obj *)((char *)(p) - (i) * sizeof(void *)))
 #define IF(o, i) ((void *)&(o)->vt[i])
@@ -376,6 +384,12 @@ static const Iface if_viewbox[] = { BOTH(CompositionViewBox, 2), { 0, 0 } };
 static const Iface if_shapes[] = { BOTH(VectorShape, 2), BOTH(IterableShape, 3), BOTH(VectorViewShape, 4), { 0, 0 } };
 static const Iface if_shape_iter[] = { BOTH(IteratorShape, 2), { 0, 0 } };
 static const Iface if_controller[] = { BOTH(AnimationController, 2), { 0, 0 } };
+static const Iface if_gradient[] = { BOTH(CompositionLinearGradientBrush, 3), BOTH(CompositionGradientBrush, 4),
+                                     BOTH(CompositionGradientBrush2, 5), BOTH(CompositionBrush, 2), { 0, 0 } };
+static const Iface if_stop[] = { BOTH(CompositionColorGradientStop, 2), { 0, 0 } };
+static const Iface if_stops[] = { BOTH(VectorStop, 2), BOTH(IterableStop, 3), BOTH(VectorViewStop, 4),
+                                  BOTH(CompositionColorGradientStopCollection, 5), { 0, 0 } };
+static const Iface if_stop_iter[] = { BOTH(IteratorStop, 2), { 0, 0 } };
 static const Iface if_implicit[] = { BOTH(ImplicitAnimationCollection, 2), BOTH(MapAnimation, 3), BOTH(IterableAnimation, 4),
                                      { 0, 0 } };
 /* the slot of the runtime class's default interface */
@@ -386,6 +400,8 @@ static int default_slot(Obj *o)
     case K_CONTAINER: return o->shape_visual ? 4 : 3;
     case K_SPRITE_SHAPE: case K_CONTAINER_SHAPE: case K_GEOMETRY: return 3;
     case K_COLOR_BRUSH: case K_SURFACE_BRUSH: case K_MASK_BRUSH: case K_NINEGRID_BRUSH: case K_INSET_CLIP: case K_RECT_CLIP: return 3;
+    case K_GRADIENT_BRUSH: return 3;
+    case K_SHAPES: return o->of && o->of->kind == K_GRADIENT_BRUSH ? 5 : 2;
     case K_TARGET: return o->vt[3] ? 3 : 2;
     case K_COMPOSITOR: return 0;
     case K_EXPRESSION: return 7;
@@ -424,8 +440,10 @@ static const Iface *ifaces(Obj *o)
     case K_GEOMETRY: return if_geometries[o->gkind];
     case K_PATH: return if_path;
     case K_VIEWBOX: return if_viewbox;
-    case K_SHAPES: return if_shapes;
-    case K_SHAPE_ITER: return if_shape_iter;
+    case K_SHAPES: return o->of && o->of->kind == K_GRADIENT_BRUSH ? if_stops : if_shapes;
+    case K_SHAPE_ITER: return o->of && o->of->kind == K_GRADIENT_BRUSH ? if_stop_iter : if_shape_iter;
+    case K_GRADIENT_BRUSH: return if_gradient;
+    case K_GRADIENT_STOP: return if_stop;
     case K_CONTROLLER: return if_controller;
     case K_IMPLICIT: return if_implicit;
     }
@@ -501,6 +519,7 @@ static HRESULT obj_name(Obj *o, HSTRING *n)
         L"Windows.UI.Composition.CompositionShapeCollection",
         L"Windows.Foundation.Collections.IIterator`1<Windows.UI.Composition.CompositionShape>",
         L"Windows.UI.Composition.AnimationController", L"Windows.UI.Composition.ImplicitAnimationCollection",
+        L"Windows.UI.Composition.CompositionLinearGradientBrush", L"Windows.UI.Composition.CompositionColorGradientStop",
     };
     static const WCHAR *const geometries[] = {
         L"Windows.UI.Composition.CompositionEllipseGeometry", L"Windows.UI.Composition.CompositionRectangleGeometry",
@@ -521,6 +540,10 @@ static HRESULT obj_name(Obj *o, HSTRING *n)
         L"Windows.UI.Composition.CircleEasingFunction", L"Windows.UI.Composition.PowerEasingFunction",
         L"Windows.UI.Composition.CompositionEasingFunction",
     };
+    if (o->kind == K_SHAPES && o->of && o->of->kind == K_GRADIENT_BRUSH)
+        return make_hstring(L"Windows.UI.Composition.CompositionColorGradientStopCollection", n);
+    if (o->kind == K_SHAPE_ITER && o->of && o->of->kind == K_GRADIENT_BRUSH)
+        return make_hstring(L"Windows.Foundation.Collections.IIterator`1<Windows.UI.Composition.CompositionColorGradientStop>", n);
     if (o->kind == K_TARGET && o->vt[3]) return make_hstring(L"Windows.UI.Composition.Desktop.DesktopWindowTarget", n);
     if (o->kind == K_KEYFRAME) return make_hstring(keyframes[o->atype], n);
     if (o->kind == K_EASING) return make_hstring(easings[o->ease.type], n);
@@ -555,7 +578,7 @@ static Obj *brush_of(void *p)
 {
     Obj *b = obj_of(p, -1, -1);
     if (b && b->kind != K_COLOR_BRUSH && b->kind != K_SURFACE_BRUSH && b->kind != K_MASK_BRUSH &&
-             b->kind != K_NINEGRID_BRUSH) { obj_release(b); b = 0; }
+             b->kind != K_NINEGRID_BRUSH && b->kind != K_GRADIENT_BRUSH) { obj_release(b); b = 0; }
     return b;
 }
 
@@ -747,16 +770,26 @@ typedef struct {
     float cx, cy, cw, ch;               /* the surface's place in the visual */
     BOOL moved;                         /* the brush's transform, inverted (visual to content) */
     Aff inv;
+    /* a linear gradient: its start point and its direction over its length
+     * squared (in the visual, before the brush's transform), its extend
+     * mode, and its colours at 256 places from start to end (premultiplied) */
+    BOOL grad;
+    float gx, gy, gdx, gdy;
+    int extend;
+    DWORD lut[256];
 } Samp;
+static BOOL brush_moved(Obj *b, Samp *s);
+static BOOL gradient_init(Obj *b, Vec2 vs, Samp *s);
 static BOOL samp_init(Obj *b, Vec2 vs, Samp *s)
 {
-    s->solid = 0; s->bits = 0; s->pitch = s->sw = s->sh = 0; s->opaque = FALSE; s->moved = FALSE;
+    s->solid = 0; s->bits = 0; s->pitch = s->sw = s->sh = 0; s->opaque = FALSE; s->moved = FALSE; s->grad = FALSE;
     s->cx = s->cy = 0; s->cw = vs.X; s->ch = vs.Y;
     if (!b) return FALSE;
     if (b->kind == K_COLOR_BRUSH) {
         s->solid = premul(b->color, 1.0f);
         return (s->solid >> 24) != 0;
     }
+    if (b->kind == K_GRADIENT_BRUSH) return gradient_init(b, vs, s);
     if (b->kind != K_SURFACE_BRUSH) return FALSE;
     s->bits = surface_pixels(b->surface, &s->pitch, &s->sw, &s->sh, &s->opaque);
     if (!s->bits || !s->sw || !s->sh) return FALSE;
@@ -768,6 +801,11 @@ static BOOL samp_init(Obj *b, Vec2 vs, Samp *s)
     }
     s->cx = (vs.X - s->cw) * b->hratio;
     s->cy = (vs.Y - s->ch) * b->vratio;
+    return brush_moved(b, s);
+}
+/* the brush's transform, inverted into @s (FALSE: it has no inverse) */
+static BOOL brush_moved(Obj *b, Samp *s)
+{
     Aff m = xform(b);
     s->moved = m.a != 1 || m.b != 0 || m.c != 0 || m.d != 1 || m.tx != 0 || m.ty != 0;
     if (s->moved) {
@@ -780,11 +818,70 @@ static BOOL samp_init(Obj *b, Vec2 vs, Samp *s)
     }
     return TRUE;
 }
+/* a linear gradient brush (Windows.UI.Composition's
+ * CompositionLinearGradientBrush): its colour stops in order of Offset,
+ * interpolated in straight sRGB between them and held beyond the first and
+ * the last; StartPoint and EndPoint relative to the visual's size (or in
+ * its units when MappingMode is Absolute), through the brush's transform;
+ * Clamp, Wrap or Mirror beyond them.  No stops: transparent. */
+static BOOL gradient_init(Obj *b, Vec2 vs, Samp *s)
+{
+    int n = b->nshapes;
+    if (n <= 0) return FALSE;
+    Obj *st[64];
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++) {                   /* (sorted by Offset, stable) */
+        Obj *o = b->shapes[i];
+        int k = i;
+        while (k > 0 && st[k - 1]->stop_at > o->stop_at) { st[k] = st[k - 1]; k--; }
+        st[k] = o;
+    }
+    BOOL any = FALSE;
+    for (int i = 0; i < 256; i++) {
+        float t = i / 255.0f;
+        Color c;
+        if (t <= st[0]->stop_at) c = st[0]->color;
+        else if (t >= st[n - 1]->stop_at) c = st[n - 1]->color;
+        else {
+            int k = 1;
+            while (k < n - 1 && st[k]->stop_at < t) k++;
+            Color a = st[k - 1]->color, z = st[k]->color;
+            float span = st[k]->stop_at - st[k - 1]->stop_at, f = span > 0 ? (t - st[k - 1]->stop_at) / span : 1.0f;
+            c.A = (BYTE)(a.A + (z.A - a.A) * f + 0.5f); c.R = (BYTE)(a.R + (z.R - a.R) * f + 0.5f);
+            c.G = (BYTE)(a.G + (z.G - a.G) * f + 0.5f); c.B = (BYTE)(a.B + (z.B - a.B) * f + 0.5f);
+        }
+        s->lut[i] = premul(c, 1.0f);
+        if (s->lut[i] >> 24) any = TRUE;
+    }
+    if (!any) return FALSE;
+    float kx = b->mapping == 0 ? 1.0f : vs.X, ky = b->mapping == 0 ? 1.0f : vs.Y;
+    s->gx = b->g_start.X * kx; s->gy = b->g_start.Y * ky;
+    float dx = b->g_end.X * kx - s->gx, dy = b->g_end.Y * ky - s->gy, len2 = dx * dx + dy * dy;
+    if (len2 < 1e-12f) { s->gdx = s->gdy = 0; }    /* (start on end: the last stop's colour) */
+    else { s->gdx = dx / len2; s->gdy = dy / len2; }
+    s->extend = b->extend;
+    s->grad = TRUE;
+    return brush_moved(b, s);
+}
+static DWORD gradient_at(const Samp *s, float u, float w)
+{
+    float t = s->gdx == 0 && s->gdy == 0 ? 1.0f : (u - s->gx) * s->gdx + (w - s->gy) * s->gdy;
+    if (s->extend == 1) t -= (float)(int)t - (t < 0 && t != (float)(int)t ? 1 : 0);            /* Wrap */
+    else if (s->extend == 2) {                                                                  /* Mirror */
+        float f = t < 0 ? -t : t;
+        int k = (int)f;
+        f -= k;
+        t = k & 1 ? 1.0f - f : f;
+    }
+    int i = (int)(t * 255.0f + 0.5f);
+    return s->lut[i < 0 ? 0 : i > 255 ? 255 : i];
+}
 /* the brush's pixel at (@u, @w) in the visual (premultiplied; 0: none) */
 static DWORD samp_at(const Samp *s, float u, float w)
 {
-    if (!s->bits) return s->solid;
+    if (!s->bits && !s->grad) return s->solid;
     if (s->moved) { float x = u, y = w; aff_apply(&s->inv, x, y, &u, &w); }
+    if (s->grad) return gradient_at(s, u, w);
     float su = (u - s->cx) * s->sw / s->cw, sv = (w - s->cy) * s->sh / s->ch;
     if (su < 0 || sv < 0 || su >= s->sw || sv >= s->sh) return 0;
     DWORD px = ((const DWORD *)(s->bits + (size_t)(int)sv * s->pitch))[(int)su];
@@ -2920,8 +3017,16 @@ static HRESULT shapes_of(Obj *owner, void **out)
     *out = IF(c, 2);
     return S_OK;
 }
-/* IVector<CompositionShape> (slot 2), IIterable (slot 3), IVectorView (slot 4) */
+/* IVector<CompositionShape> (slot 2), IIterable (slot 3), IVectorView (slot 4);
+ * a gradient brush's ColorStops is the same collection over its colour stops
+ * (IVector<CompositionColorGradientStop> and the rest, with
+ * ICompositionColorGradientStopCollection in slot 5) */
 #define SHP(p, i) (OBJ_AT(p, i)->of)
+static Obj *item_of(Obj *owner, void *item)
+{
+    return owner->kind == K_GRADIENT_BRUSH ? obj_of(item, K_GRADIENT_STOP, K_GRADIENT_STOP)
+                                           : obj_of(item, K_SPRITE_SHAPE, K_CONTAINER_SHAPE);
+}
 static HRESULT shapes_at(Obj *o, UINT32 i, void **out)
 {
     if (!out) return E_POINTER;
@@ -2935,7 +3040,7 @@ static HRESULT shapes_index(Obj *o, void *shape, UINT32 *at, boolean_t *found)
 {
     if (!at || !found) return E_POINTER;
     *at = 0; *found = 0;
-    Obj *s = obj_of(shape, K_SPRITE_SHAPE, K_CONTAINER_SHAPE);
+    Obj *s = item_of(o, shape);
     if (!s) return S_OK;
     lock();
     for (int i = 0; i < o->nshapes; i++) if (o->shapes[i] == s) { *at = (UINT32)i; *found = 1; break; }
@@ -2958,7 +3063,7 @@ static HRESULT shapes_many(Obj *o, UINT32 start, UINT32 cap, void **items, UINT3
 /* @shape in at @i (@replace: in place of the one there) */
 static HRESULT shapes_put(Obj *o, UINT32 i, void *shape, BOOL replace)
 {
-    Obj *s = obj_of(shape, K_SPRITE_SHAPE, K_CONTAINER_SHAPE), *old = 0;
+    Obj *s = item_of(o, shape), *old = 0;
     if (!s) return E_INVALIDARG;
     HRESULT hr = S_OK;
     lock();
@@ -3068,6 +3173,75 @@ static HRESULT STDMETHODCALLTYPE it_many(void *p, UINT32 cap, void **items, UINT
     return hr;
 }
 static const void *const shape_iter_vt[] = { BASE(2), (void *)it_current, (void *)it_has, (void *)it_next, (void *)it_many };
+
+/* ---- linear gradient brushes and their colour stops (Pulsar 3 part 28: what
+ * the XAML framework's LinearGradientBrush draws with; drawn by samp_init's
+ * gradient_init above) ---------------------------------------------------- */
+/* ICompositionColorGradientStop (slot 2): Color, Offset */
+static HRESULT STDMETHODCALLTYPE gs_get_color(void *p, Color *c) { if (!c) return E_POINTER; *c = OBJ_AT(p, 2)->color; return S_OK; }
+static HRESULT STDMETHODCALLTYPE gs_put_color(void *p, Color c) { lock(); OBJ_AT(p, 2)->color = c; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE gs_get_at(void *p, float *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 2)->stop_at; return S_OK; }
+static HRESULT STDMETHODCALLTYPE gs_put_at(void *p, float v) { lock(); OBJ_AT(p, 2)->stop_at = v; unlock(); schedule(); return S_OK; }
+static const void *const stop_vt[] = { BASE(2), (void *)gs_get_color, (void *)gs_put_color, (void *)gs_get_at, (void *)gs_put_at };
+static HRESULT stop_new(Obj *comp, float at, Color c, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *o = obj_new(comp, K_GRADIENT_STOP);
+    if (!o) return E_OUTOFMEMORY;
+    o->vt[2] = stop_vt;
+    o->stop_at = at;
+    o->color = c;
+    *out = IF(o, 2);
+    return S_OK;
+}
+static const void *const stops_vt[] = { BASE(5) };  /* ICompositionColorGradientStopCollection (no members of its own) */
+/* ICompositionLinearGradientBrush (slot 3): EndPoint, StartPoint */
+static HRESULT STDMETHODCALLTYPE lg_get_end(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 3)->g_end; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lg_put_end(void *p, Vec2 v) { lock(); OBJ_AT(p, 3)->g_end = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE lg_get_start(void *p, Vec2 *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 3)->g_start; return S_OK; }
+static HRESULT STDMETHODCALLTYPE lg_put_start(void *p, Vec2 v) { lock(); OBJ_AT(p, 3)->g_start = v; unlock(); schedule(); return S_OK; }
+static const void *const linear_vt[] = { BASE(3), (void *)lg_get_end, (void *)lg_put_end, (void *)lg_get_start, (void *)lg_put_start };
+/* ICompositionGradientBrush (slot 4): the transform members are the surface
+ * brush's (sb2_*, slot 4 too), with ColorStops, ExtendMode and
+ * InterpolationSpace (kept: straight sRGB here) */
+static HRESULT STDMETHODCALLTYPE gb_stops(void *p, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *owner = OBJ_AT(p, 4), *c = obj_new(owner->comp, K_SHAPES);
+    if (!c) return E_OUTOFMEMORY;
+    c->vt[2] = shapes_vt; c->vt[3] = shapes_iterable_vt; c->vt[4] = shapes_view_vt; c->vt[5] = stops_vt;
+    c->of = owner;
+    obj_addref(owner);
+    *out = IF(c, 5);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE gb_get_extend(void *p, int *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 4)->extend; return S_OK; }
+static HRESULT STDMETHODCALLTYPE gb_put_extend(void *p, int v) { lock(); OBJ_AT(p, 4)->extend = v; unlock(); schedule(); return S_OK; }
+static HRESULT STDMETHODCALLTYPE gb_get_space(void *p, int *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 4)->space; return S_OK; }
+static HRESULT STDMETHODCALLTYPE gb_put_space(void *p, int v) { OBJ_AT(p, 4)->space = v; return S_OK; }
+static const void *const gradient_vt[] = { BASE(4), (void *)sb2_get_anchor, (void *)sb2_put_anchor, (void *)sb2_get_center,
+                                           (void *)sb2_put_center, (void *)gb_stops, (void *)gb_get_extend, (void *)gb_put_extend,
+                                           (void *)gb_get_space, (void *)gb_put_space, (void *)sb2_get_offset, (void *)sb2_put_offset,
+                                           (void *)sb2_get_angle, (void *)sb2_put_angle, (void *)sb2_get_deg, (void *)sb2_put_deg,
+                                           (void *)sb2_get_scale, (void *)sb2_put_scale, (void *)sb2_get_tm, (void *)sb2_put_tm };
+/* ICompositionGradientBrush2 (slot 5): MappingMode */
+static HRESULT STDMETHODCALLTYPE gb2_get_mapping(void *p, int *v) { if (!v) return E_POINTER; *v = OBJ_AT(p, 5)->mapping; return S_OK; }
+static HRESULT STDMETHODCALLTYPE gb2_put_mapping(void *p, int v) { lock(); OBJ_AT(p, 5)->mapping = v; unlock(); schedule(); return S_OK; }
+static const void *const gradient2_vt[] = { BASE(5), (void *)gb2_get_mapping, (void *)gb2_put_mapping };
+static HRESULT linear_new(Obj *comp, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    Obj *b = obj_new(comp, K_GRADIENT_BRUSH);
+    if (!b) return E_OUTOFMEMORY;
+    b->vt[2] = empty2_vt; b->vt[3] = linear_vt; b->vt[4] = gradient_vt; b->vt[5] = gradient2_vt;
+    b->g_end.X = 1.0f;                  /* (from (0, 0) to (1, 0), relative to the visual) */
+    b->mapping = 1;
+    *out = IF(b, 3);
+    return S_OK;
+}
 
 /* IShapeVisual (slot 4 of a shape visual): Shapes, ViewBox */
 static HRESULT STDMETHODCALLTYPE shv_shapes(void *p, void **out) { return shapes_of(OBJ_AT(p, 4), out); }
@@ -3958,9 +4132,12 @@ static const void *const compositor2_vt[] = { BASE(5), (void *)c_none, (void *)c
                                               (void *)c2_step, (void *)c2_step_n };
 /* ICompositor3 (slot S_C3): CreateHostBackdropBrush (not here) */
 static const void *const compositor3_vt[] = { BASE(6), (void *)c_none };
-/* ICompositor4 (slot S_C4): gradient stops and brushes and spring animations (not here) */
-static HRESULT STDMETHODCALLTYPE c_none_stop(void *p, float at, Color c, void **out) { (void)p; (void)at; (void)c; return not_made(out); }
-static const void *const compositor4_vt[] = { BASE(7), (void *)c_none, (void *)c_none_stop, (void *)c_none, (void *)c_none, (void *)c_none,
+/* ICompositor4 (slot S_C4): colour gradient stops and linear gradient
+ * brushes; spring animations are not here */
+static HRESULT STDMETHODCALLTYPE c4_stop(void *p, void **out) { Color none = { 0, 0, 0, 0 }; return stop_new(COMP(p, S_C4), 0.0f, none, out); }
+static HRESULT STDMETHODCALLTYPE c4_stop_with(void *p, float at, Color c, void **out) { return stop_new(COMP(p, S_C4), at, c, out); }
+static HRESULT STDMETHODCALLTYPE c4_linear(void *p, void **out) { return linear_new(COMP(p, S_C4), out); }
+static const void *const compositor4_vt[] = { BASE(7), (void *)c4_stop, (void *)c4_stop_with, (void *)c4_linear, (void *)c_none, (void *)c_none,
                                               (void *)c_none };
 /* ICompositor5 (slot S_C5): Comment, GlobalPlaybackRate (kept), shapes, their
  * geometries and view boxes; bounce and path animations and RequestCommitAsync

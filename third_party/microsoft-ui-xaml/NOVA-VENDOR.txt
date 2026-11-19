@@ -437,6 +437,25 @@ ResourceDictionary::Lookup (marked "NovaOS") hands a value looked up by code
 outside Windows.UI.Xaml.dll to nova_value_for_caller, which returns it as the
 app's Windows object.
 
+Pulsar item 3, twenty-seventh slice (a page's lists), the same commit,
+CRLF made LF: dxaml/lib's Selector_Partial, Selection, SelectorItem_Partial,
+ListViewBase_Partial and its eight ListViewBase_Partial_* parts,
+ListView_Partial, ListViewBaseItem_Partial, ListViewItem_Partial,
+ListViewBaseHeaderItem_Partial, ListViewHeaderItem_Partial,
+ListViewItemPresenter_Partial, ListViewBaseItemPresenter_Partial,
+ItemIndexRange_Partial, ContainerContentChangingEventArgs_Partial,
+incrementalloading and TryStartConnectedAnimationOperation .cpp, with
+IncrementalLoadingAdapter.h, ItemIndexRange_Partial.h, incrementalloading.h,
+StartDragAsyncOperation.h and TryStartConnectedAnimationOperation.h;
+winrtgeneratedclasses' ItemIndexRange.g.h and the .g.cpp of Selector,
+SelectorItem, ListViewBase, ListView, ListViewBaseItem, ListViewItem, their
+two template settings, ListViewBaseHeaderItem, ListViewHeaderItem,
+ListViewItemPresenter, ListViewBaseItemPresenter, ItemIndexRange,
+ItemClickEventArgs, ContainerContentChangingEventArgs,
+DragItemsStartingEventArgs and DragItemsCompletedEventArgs; and
+components/visualstateshelper and components/ItemIndexRangeHelper (inc,
+lib and their projects).
+
 XAML text input, third part (a typable TextBox on a page), the same
 commit, unchanged (upstream line endings): core/native/text/Controls'
 TextBoxBase, TextBox, TextBoxView, TextServicesHost, HWRenderTarget,

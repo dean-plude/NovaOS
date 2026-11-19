@@ -17324,6 +17324,33 @@ pixels.  Not yet: the Text Object Model (`ITextDocument2`,
 text formatting, IME composition and the touch keyboard; then the
 `TextBox` itself on a XAML page.
 
+## CI: Settings' Bluetooth pairing lost to a stale HID connect
+
+The `bluetooth settings` test (devices suite) failed now and then on pull
+requests that did not touch Bluetooth (#618, #631): Settings paired the
+mouse, but its HID service never came on. The serial log showed why. When
+`bttest remove` switched the mouse's HID service off, `hidbth`'s link
+thread saw its channels close and called `BthHidConnect` again before the
+node was delisted; that call was left waiting (up to 30 seconds) for the
+old link to authenticate after the link had dropped. When Settings then
+paired the forgotten mouse a few seconds later, in the same device slot,
+the stale call took the new link's answers as its own, sent its own Set
+Connection Encryption (the log's `encryption failed (02)` next to
+Settings' `authenticated and encrypted`), and on failing disconnected the
+link, so Settings' SDP query found no link (`L2CAP PSM 0001 did not open`),
+the mouse had no report descriptor, and its HID service was not switched
+on.
+
+Each device now counts the links that came down (`drops` in
+`kernel/nt/bthport.c`, kept when the device is forgotten). `secure()`
+gives up as soon as the link it started on drops, and `BthHidConnect`
+returns without touching the link when its node stopped being the
+device's or the link changed under it.
+
+- **Tests:** the devices suite's Bluetooth boot (`bluetooth settings`,
+  `bluetooth device reconnect`, `bluetooth remove`) covers the paths; the
+  race itself needed CI's timing and is not forced by a test.
+
 ## Windows Calculator's launch, twenty-sixth slice: resources the app looks up
 
 The twenty-sixth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
@@ -17348,6 +17375,66 @@ did; the framework's own lookups are unchanged.
   reference is gone.  The page stops next at a `ListView` (its history
   list), which NovaOS does not build yet.  That is the next part.  The page
   does not draw yet.
+
+## Windows Calculator's launch, twenty-seventh slice: lists
+
+The twenty-seventh part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
+step 32.6 of `Windows.UI.Xaml` on NovaOS
+([design](design/windows-ui-xaml.md)).  Calculator's history and memory
+lists are `ListView`s, and NovaOS's XAML framework did not build
+`ListView`, so the page load stopped there.  The framework's `ListView`
+is now built from Microsoft's sources (microsoft-ui-xaml, MIT), with
+everything it stands on: `ListViewBase`, `Selector` and its selected
+items, the list's item containers and their presenter, incremental
+loading and the arguments of the list's events.  Not built yet: the list's
+automation peers, dragging items out of a list, and the panels a list lays
+its items out in.
+
+- **Tests:** `wuxamltest` loads a `ListView` with two items from markup,
+  reads it through Windows' `IListView`, `IListViewBase` and `ISelector`,
+  and checks its two items, its `SelectionMode` (`Single`) and that
+  nothing is selected yet (`SelectedIndex` -1).
+- **Found:** Calculator's page gets past its lists and stops next at a
+  `LinearGradientBrush`, which NovaOS does not build yet.  That is the
+  next part.  The page does not draw yet.
+
+## Network security: the Network List Manager
+
+Part of the roadmap's network security item (part 2,
+[design](design/network-security.md)).  Programs ask Windows whether they
+are online, and on which kind of network, through the Network List
+Manager (`INetworkListManager`, `netprofm.dll`): browsers and chat
+programs check `IsConnectedToInternet` before they go online, Office and
+store clients ask `INetworkCostManager` whether the connection is
+metered, and installers set a network Private with `INetwork::SetCategory`.
+NovaOS had no `netprofm.dll`, so `CoCreateInstance` of the class failed.
+
+- **The class.**  `netprofm.dll` serves `NetworkListManager`
+  (`{DCB00C01-...}`, registered in process, both threading models):
+  `INetworkListManager`, `INetworkCostManager` and
+  `IConnectionPointContainer`.
+- **What it says.**  Connectivity comes from the adapter: IPv4 with a
+  default gateway is `IPV4_INTERNET` (without one `IPV4_SUBNET`), an IPv6
+  address from a router or DHCPv6 is `IPV6_INTERNET`.  The networks are
+  the firewall's own list under NetworkList's `Profiles` (name,
+  description, category); the one the PC is on now is the firewall's.
+  The one connection is the adapter, by the GUID `iphlpapi` names it
+  with.  A wired network costs nothing: unrestricted, the data plan
+  unknown (`SetSimulatedProfileInfo` changes that, as on Windows).
+- **Changes.**  `SetCategory` on the network the PC is on goes through
+  the firewall, so the Private or Public profile is in force at once;
+  `SetName`, `SetDescription` and other networks' categories are written
+  where Windows keeps them.  All need an administrator.
+- **Events.**  Advising a sink starts a thread that looks once a second
+  and calls `INetworkListManagerEvents::ConnectivityChanged`,
+  `INetworkEvents` (networks added and deleted, their connectivity, name,
+  description, category and connection) and
+  `INetworkConnectionEvents`.
+
+`nlmtest` (network suite, 64- and 32-bit) checks all of it on QEMU's
+network.  Still to do: IDispatch (scripts that bind late), a second
+adapter, an "Unidentified network" for an adapter without a gateway, and
+the networks' creation and connection times.
 
 ## ShareX starts again: app data only for packaged apps
 

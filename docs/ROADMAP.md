@@ -438,15 +438,18 @@ item ends when a named program or test demonstrates it.
   2 ms while TIME_CRITICAL threads spin on every CPU, where a plain
   TIME_CRITICAL one waits 24-34 ms; busy registered threads still leave a
   NORMAL thread room).
-- Network security, part 2: the filtering engine and the Windows Firewall
-  are in ([design](design/network-security.md),
-  [history](HISTORY.md#network-security-a-filtering-engine-and-the-windows-firewall));
+- Network security, part 2: the filtering engine, the Windows Firewall
+  and the Network List Manager (`INetworkListManager`, `netprofm.dll`:
+  connectivity, the networks and their categories, costs and events;
+  `nlmtest`) are in ([design](design/network-security.md),
+  [history](HISTORY.md#network-security-a-filtering-engine-and-the-windows-firewall),
+  [its history](HISTORY.md#network-security-the-network-list-manager));
   next are WFP callouts (`FwpmCalloutAdd0` and kernel-mode callout
   drivers), IPsec and connection security rules, the "allow this app?"
   notification when a program first listens, ICMP rules, IDispatch for
   `hnetcfg`'s objects (PowerShell and scripts), the legacy `INetFwMgr`
-  API, `INetworkListManager` (`netprofm.dll`), service-restricted rules,
-  SmartScreen-style reputation checks, and a check on the reference laptop.
+  API, service-restricted rules, SmartScreen-style reputation checks,
+  and a check on the reference laptop.
 
 <!-- END generated:next-kernel -->
 
@@ -1680,6 +1683,13 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   gone.  Test `xamldlltest`.  The page now stops at a `ListView`, which
   NovaOS does not build yet.  Next: `ListView`, then the CI check that
   Calculator computes `2 + 2`, which ticks this step.
+  Thirty-third part done (Pulsar item 3, twenty-seventh slice): the
+  framework's `ListView`, over `ListViewBase`, `Selector` and its
+  `Selection`, with its items, built for Calculator's history and memory
+  lists.  Test `wuxamltest`.  Calculator's page gets past its lists and
+  stops next at a `LinearGradientBrush`, which NovaOS does not build yet.
+  Next: `LinearGradientBrush`, then the CI check that Calculator computes
+  `2 + 2`, which ticks this step.
 
 ---
 

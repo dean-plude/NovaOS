@@ -1758,6 +1758,47 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
 # (MenuFlyout_Partial.cpp includes the render target bitmap's header, whose
 # pixel buffer is a Windows.Storage.Streams IBuffer with byte access)
 FILE_FIRST['MenuFlyout_Partial.cpp'] = ('windows.storage.streams.h', 'robuffer.h')
+# (step 32.6, the lists a page shows, Calculator's history and memory lists
+# (Pulsar item 3, slice 27): the framework's ListView over its base,
+# ListViewBase (its selection, interaction, reorder, container phases, data
+# virtualization, semantic zoom, serialization and UI Automation parts),
+# over Selector, an ItemsControl, and its selected items (Selection);
+# their containers (SelectorItem, ListViewBaseItem, ListViewItem) with
+# their template settings, the group header items, the item presenter that
+# draws a container's chrome, the selected ranges (ItemIndexRange) and
+# incremental loading, the connected animation operation a list starts, and the arguments of its
+# events, each its generated class and its partial one; with the two
+# components the list asks: the visual states helper and the item index
+# range helper.  The automation peers join later, and so does dragging
+# items out (StartDragAsyncOperation.cpp, on the closed Windows App SDK's
+# FrameworkUdk/CoreDragOperationFunctions.h))
+_LIST_VIEW = ('Selector', 'SelectorItem', 'ListViewBase', 'ListView', 'ListViewBaseItem', 'ListViewItem',
+              'ListViewBaseItemTemplateSettings', 'ListViewItemTemplateSettings', 'ListViewBaseHeaderItem',
+              'ListViewHeaderItem', 'ListViewItemPresenter', 'ListViewBaseItemPresenter', 'ItemIndexRange',
+              'ItemClickEventArgs', 'ContainerContentChangingEventArgs', 'DragItemsStartingEventArgs',
+              'DragItemsCompletedEventArgs')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('../%s.cpp' % x for x in (
+    'Selector_Partial', 'Selection', 'SelectorItem_Partial', 'ListViewBase_Partial',
+    'ListViewBase_Partial_ContainerPhase',
+    'ListViewBase_Partial_DataVirtualization', 'ListViewBase_Partial_Interaction', 'ListViewBase_Partial_Reorder',
+    'ListViewBase_Partial_Selection', 'ListViewBase_Partial_SemanticZoomInformation',
+    'ListViewBase_Partial_Serialization', 'ListViewBase_Partial_UIAProperties', 'ListView_Partial',
+    'ListViewBaseItem_Partial', 'ListViewItem_Partial', 'ListViewBaseHeaderItem_Partial', 'ListViewHeaderItem_Partial',
+    'ListViewItemPresenter_Partial', 'ListViewBaseItemPresenter_Partial', 'ItemIndexRange_Partial',
+    'ContainerContentChangingEventArgs_Partial', 'incrementalloading', 'TryStartConnectedAnimationOperation')) + \
+    tuple('../winrtgeneratedclasses/%s.g.cpp' % x for x in _LIST_VIEW)
+for _p in ('visualstateshelper', 'itemindexrangehelper'):
+    COMPONENT_INCLUDES.append('components/%s/inc' % _p)
+_VISUALSTATESHELPER = 'components/visualstateshelper/lib/Microsoft.UI.Xaml.VisualStatesHelper.vcxproj'
+_ITEMINDEXRANGEHELPER = 'components/ItemIndexRangeHelper/lib/Microsoft.UI.Xaml.ItemIndexRangeHelper.vcxproj'
+CORE_LIBRARIES.append((_VISUALSTATESHELPER, _VISUALSTATESHELPER, 'components/pch/precomp.h', []))
+CORE_LIBRARIES.append((_ITEMINDEXRANGEHELPER, _ITEMINDEXRANGEHELPER, 'components/pch/precomp.h', []))
+# (the list's serialization (ListViewPersistenceHelper's) writes and reads
+# its keys with Windows.Storage.Streams' DataWriter and DataReader)
+FILE_FIRST['ListViewBase_Partial_Serialization.cpp'] = ('windows.storage.streams.h', 'robuffer.h')
+# (and its incremental loading names IAsyncInfo bare, as the Windows SDK lets it)
+for _f in ('incrementalloading.cpp', 'ListViewBase_Partial_DataVirtualization.cpp'):
+    FILE_FIRST[_f] = ('nova_async_info.h',)
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

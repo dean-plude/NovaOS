@@ -2012,5 +2012,22 @@ vendors.
    `EndPoint` and two `GradientStop`s read back) and `comptest` (a
    gradient from red to blue across a sprite, then mirrored).
 
+   Pulsar item 3, twenty-ninth slice: the list items panel.  The
+   `ListView`'s template lays its items out in an `ItemsStackPanel`,
+   whose constructor was an unbuilt stand-in.  Vendored and built from
+   microsoft-ui-xaml 866ba81: `ItemsStackPanel` over
+   `ModernCollectionBasePanel` (its fifteen partial files: container
+   mapper, cache manager, window and viewport management, sticky headers,
+   snap points, interaction, the `IItemContainerGenerator2` and lookup
+   interfaces, the iterators) and `StackingLayoutStrategy`, each its
+   generated class and its partial one, with the layout strategy
+   component `components/moco` (`LayoutStrategyBase` and
+   `StackingLayoutStrategyImpl`; the wrapping and calendar strategies of
+   `ItemsWrapGrid` and the `CalendarView` are not built).  They compiled
+   with no NovaOS change.  Calculator's page gets past its lists' panel
+   and stops next at `HyperlinkButton`.  Test: `wuxamltest` (an
+   `ItemsStackPanel` from markup, `Orientation` `Horizontal`,
+   `CacheLength` 2).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

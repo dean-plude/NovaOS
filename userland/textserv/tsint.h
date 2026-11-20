@@ -12,14 +12,15 @@ int memcmp(const void *a, const void *b, size_t n);
 #define UNDO_MAX    100
 #define DEFAULT_MAX 32767                         /* Rich Edit's text limit until EM_EXLIMITTEXT */
 
-typedef struct { WCHAR *text; BYTE *fmt; LONG len, anchor, active; } SNAP;
+typedef struct { WCHAR *text; BYTE *fmt; LONG len, anchor, active; int lastalign; } SNAP;
 /* a character format of rich text (runs.c): the default's properties that
  * it sets (mask: CFM_BOLD, CFM_ITALIC, CFM_UNDERLINE, CFM_STRIKEOUT,
- * CFM_COLOR) and their values (CFE_ bits, the same as the CFM_ ones) */
-typedef struct { DWORD mask, effects; COLORREF color; } RUNFMT;
+ * CFM_COLOR) and their values (CFE_ bits, the same as the CFM_ ones); on a
+ * paragraph mark, also its paragraph's alignment (PFA_, 0: the default's) */
+typedef struct { DWORD mask, effects; COLORREF color; int align; } RUNFMT;
 #define MAXFMT 255
 #define FMT_MASK (CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_COLOR)
-typedef struct { LONG start, len, width; } LINE;  /* a laid-out line: [start, start+len) */
+typedef struct { LONG start, len, width, shift; } LINE;  /* a laid-out line: [start, start+len), drawn @shift right (its alignment) */
 
 typedef struct TS {
     IUnknown inner;                               /* the object's own IUnknown (aggregation) */
@@ -43,6 +44,8 @@ typedef struct TS {
     LINE *lines;
     int nlines, linecap;
     LONG layoutw;                                 /* the width laid out for (0: no wrap) */
+    LONG alignw;                                  /* the width lines were aligned in */
+    BOOL aligned;                                 /* a line is centred or right-aligned */
     BOOL dirty;
     LONG scrollx, scrolly;
     LONG targetx;                                 /* Up and Down keep to this x */
@@ -74,6 +77,9 @@ typedef struct TS {
     /* the context menu (XAML text input, part 6) */
     IRichEditOleCallback_ *olecb;                 /* EM_SETOLECALLBACK's, held */
     DWORD touchopts;                              /* EM_SETTOUCHOPTIONS' (RTO_DISABLECONTEXTMENU) */
+    /* paragraph alignment (runs.c; XAML text input, part 7) */
+    int defalign;                                 /* the default paragraph format's (PFA_), the host's or SPF_SETDEFAULT's */
+    int lastalign;                                /* the final paragraph's, or (plain text) every paragraph's; 0: the default */
 } TS;
 
 #define FROM_IFACE(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, iface)))
@@ -140,12 +146,15 @@ HRESULT make_hstring(const WCHAR *s, UINT32 n, HSTRING *out);
 /* winrtfmt.c */
 HRESULT wfmt_wrap(void *tomfont, void **out);     /* Microsoft.UI.Text's ITextCharacterFormat over a TOM font */
 void *wfmt_tom(void *format);                     /* the TOM font of one of ours, or null */
+HRESULT wpara_wrap(void *tompara, void **out);    /* Microsoft.UI.Text's ITextParagraphFormat over a TOM paragraph */
+void *wpara_tom(void *format);                    /* the TOM paragraph of one of ours, or null */
 
 TS *tom_range_ts(ITextRange2 *r);                 /* a range's text services (null once gone, or not ours) */
 
 /* tomfmt.c */
 HRESULT tom_format(BOOL font, ITextRange2 *range, void **out);   /* a range's ITextFont2 (or ITextPara2) */
 HRESULT tom_set_font(ITextRange2 *range, void *font);            /* ITextRange::SetFont */
+HRESULT tom_set_para(ITextRange2 *range, void *para);            /* ITextRange::SetPara */
 
 /* runs.c */
 #define RICH(t) (((t)->bits & TXTBIT_RICHTEXT) != 0)
@@ -160,4 +169,11 @@ void fmt_query(TS *t, LONG a, LONG b, CHARFORMAT2W *out);   /* dwMask: what is t
 BOOL fmt_toggle(TS *t, DWORD effect);             /* Ctrl+B, Ctrl+I, Ctrl+U */
 HFONT fmt_font(TS *t, int key);
 void fmt_free_fonts(TS *t);
+/* paragraphs' alignment (PFA_LEFT, PFA_RIGHT, PFA_CENTER, PFA_JUSTIFY) */
+int para_align(TS *t, LONG cp);                   /* that of the paragraph holding @cp */
+int para_own(TS *t, LONG cp);                     /* its own (0: the default's) */
+int para_query(TS *t, LONG a, LONG b);            /* that of the paragraphs [a, b) touches, or 0 when they differ */
+BOOL para_apply(TS *t, LONG a, LONG b, int align);
+int fmt_with_align(TS *t, int idx, int align);    /* format @idx as a paragraph mark aligned @align */
+void para_refresh(TS *t);                         /* the host's default paragraph format (TxGetParaFormat) */
 void fmt_decorate(TS *t, DWORD effects, LONG x0, LONG x1, LONG y, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx);

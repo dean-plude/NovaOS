@@ -291,7 +291,7 @@ HRESULT dw_draw(TS *t, void *rt, const RECT *rc, BOOL opaque)
              brush_of(&bs, t->host ? HOST(t)->TxGetSysColor(t->host, COLOR_WINDOW) : GetSysColor(COLOR_WINDOW)));
     for (i = 0; i < t->nlines; i++) {
         LINE *ln = &t->lines[i];
-        LONG y = rc->top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc->left - t->scrollx;
+        LONG y = rc->top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc->left - t->scrollx + ln->shift;
         WCHAR *s;
         int *dx;
         if (y + t->lineh <= rc->top || y >= rc->bottom) continue;

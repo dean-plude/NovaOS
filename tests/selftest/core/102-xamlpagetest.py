@@ -13,7 +13,8 @@
 # in it through the clipboard with its Copying/Paste/Cutting events, a PasswordBox typed into
 # (its Password, PasswordChanged, its characters drawn, Ctrl+C copying nothing) and a
 # RichEditBox typed into (its Document's text, TextChanged, Ctrl+A and Ctrl+C); then (part 5)
-# Ctrl+B bolds its selection, read back from Document.Selection.CharacterFormat.Bold; then (part 6)
+# Ctrl+B bolds its selection, read back from Document.Selection.CharacterFormat.Bold, and (part 7)
+# Ctrl+E centres its paragraph, read back from Document.Selection.ParagraphFormat.Alignment; then (part 6)
 # the TextBox's context menu (a PopupMenu): opened with the right button, Select All chosen from it,
 # opened with the menu key and closed with Escape
 DOC = ('`xamlpagetest` (a XAML page in a `Window`: the framework\'s desktop window, built from its sources, on the '
@@ -26,7 +27,8 @@ DOC = ('`xamlpagetest` (a XAML page in a `Window`: the framework\'s desktop wind
        '(its `CopyingToClipboard`, `Paste` and `CuttingToClipboard` events), a `PasswordBox` typed into (its `Password`, '
        '`PasswordChanged`, its password characters drawn, Ctrl+C copying nothing) and a `RichEditBox` typed into (its '
        '`Document` text, `TextChanged`, Ctrl+A and Ctrl+C, Ctrl+B bolding its selection as '
-       '`Document.Selection.CharacterFormat.Bold` reads back), the `TextBox`\'s context menu opened with the right '
+       '`Document.Selection.CharacterFormat.Bold` reads back, Ctrl+E centring its paragraph as '
+       '`Document.Selection.ParagraphFormat.Alignment` reads back), the `TextBox`\'s context menu opened with the right '
        'button (Select All chosen from it) and with the menu key, then closed)')
 TESTS = [
     Test('xamlpagetest', 'xamlpagetest', [r'xamlpagetest: \d+ passed, 0 failed \(64-bit\)'], timeout=200,

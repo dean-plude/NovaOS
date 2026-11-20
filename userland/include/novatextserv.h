@@ -96,6 +96,17 @@ typedef enum { TXTBACK_TRANSPARENT = 0, TXTBACK_OPAQUE = 1 } TXTBACKSTYLE;
 #define SCF_WORD       0x0002
 #define SCF_ALL        0x0004
 #endif
+/* paragraph formats (EM_SETPARAFORMAT, EM_GETPARAFORMAT) */
+#ifndef PFM_ALIGNMENT
+#define PFM_ALIGNMENT  0x00000008
+#define PFA_LEFT       1
+#define PFA_RIGHT      2
+#define PFA_CENTER     3
+#define PFA_JUSTIFY    4
+#endif
+#ifndef SPF_SETDEFAULT
+#define SPF_SETDEFAULT 0x0004
+#endif
 
 /* ITextHost::TxGetPropertyBits and OnTxPropertyBitsChange */
 #define TXTBIT_RICHTEXT          0x00000001

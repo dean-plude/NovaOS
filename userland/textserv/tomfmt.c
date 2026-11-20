@@ -10,7 +10,11 @@
  * caret's empty paragraph for its direction (ITextPara2's GetEffects,
  * PFE_RTLPARA) and sets it, and keeps per-character cookies in the font
  * (GetCookie, SetCookie) while it composes input.  The paragraph is always
- * left to right; the cookie is kept per object.  The other properties
+ * left to right; the cookie is kept per object.  A range's paragraph is
+ * live too: its alignment is that of the paragraphs the range touches
+ * (tomUndefined where they differ, runs.c), and setting it aligns them;
+ * GetDuplicate, SetDuplicate (ITextRange::SetPara) and IsEqual work on the
+ * alignment (XAML text input, part 7).  The other properties
  * answer E_NOTIMPL, each method by its own number of arguments (the
  * interfaces are stdcall in 32-bit code, so a method pops what it is
  * given).  Written from the Text Object Model documentation.
@@ -22,8 +26,9 @@ typedef struct FMT {
     LONG ref;
     BOOL font;                                    /* ITextFont2, else ITextPara2 */
     LONG cookie;
-    ITextRange2 *range;                           /* a live font's range, or null: a duplicate */
-    CHARFORMAT2W cf;                              /* a duplicate's values (dwMask: those defined) */
+    ITextRange2 *range;                           /* a live font's or paragraph's range, or null: a duplicate */
+    CHARFORMAT2W cf;                              /* a duplicate font's values (dwMask: those defined) */
+    LONG align;                                   /* a duplicate paragraph's alignment (PFA_, 0: undefined) */
 } FMT;
 
 #define tomFalse_      0
@@ -275,6 +280,77 @@ HRESULT tom_set_font(ITextRange2 *range, void *font)
 static HRESULT STDMETHODCALLTYPE c_get(FMT *f, LONG *v) { if (!v) return E_INVALIDARG; *v = f->cookie; return S_OK; }
 static HRESULT STDMETHODCALLTYPE c_set(FMT *f, LONG v) { f->cookie = v; return S_OK; }
 
+/* ---- the paragraph properties: the alignment -------------------------- */
+static BOOL ours_para(const FMT *p) { return p && p->lpVtbl[0] == (const void *)f_qi && !p->font; }
+
+/* tomAlignLeft 0, Center 1, Right 2, Justify 3 from and to PFA_LEFT 1,
+ * PFA_RIGHT 2, PFA_CENTER 3, PFA_JUSTIFY 4 */
+static LONG tom_align(int pfa) { static const LONG m[] = { tomUndefined, 0, 2, 1, 3 }; return pfa >= 1 && pfa <= 4 ? m[pfa] : tomUndefined; }
+static int pfa_align(LONG tom) { static const int m[] = { PFA_LEFT, PFA_CENTER, PFA_RIGHT, PFA_JUSTIFY }; return tom >= 0 && tom <= 3 ? m[tom] : 0; }
+static LONG para_value(FMT *f)
+{
+    LONG a, b;
+    TS *t;
+    if (!f->range) return tom_align(f->align);
+    if (!(t = range_of(f, &a, &b))) return tomUndefined;
+    return tom_align(para_query(t, a, b));
+}
+static HRESULT para_put(FMT *f, LONG v)
+{
+    LONG a, b;
+    TS *t;
+    if (v == tomUndefined) return S_OK;
+    if (v < 0 || v > 3) return E_INVALIDARG;
+    if (!f->range) { f->align = pfa_align(v); return S_OK; }
+    if (!(t = range_of(f, &a, &b))) return CO_E_RELEASED_;
+    if (t->bits & TXTBIT_READONLY) return E_ACCESSDENIED;
+    return para_apply(t, a, b, pfa_align(v)) ? S_OK : E_INVALIDARG;
+}
+static HRESULT STDMETHODCALLTYPE p_getalign(FMT *f, LONG *v)
+{
+    if (!v) return E_INVALIDARG;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    *v = para_value(f);
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_setalign(FMT *f, LONG v) { return para_put(f, v); }
+static HRESULT STDMETHODCALLTYPE p_getdup(FMT *f, void **out)
+{
+    FMT *d;
+    HRESULT hr;
+    LONG v;
+    if (!out) return E_INVALIDARG;
+    *out = 0;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    if (FAILED(hr = tom_format(FALSE, 0, (void **)&d))) return hr;
+    v = para_value(f);
+    d->align = pfa_align(v);
+    *out = d;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_setdup(FMT *f, FMT *from)
+{
+    if (!from || !ours_para(from)) return E_INVALIDARG;
+    return para_put(f, para_value(from));
+}
+static HRESULT STDMETHODCALLTYPE p_isequal(FMT *f, FMT *other, LONG *v)
+{
+    BOOL same = other && ours_para(other) && para_value(f) == para_value(other);
+    if (v) *v = same ? tomTrue : tomFalse_;
+    return same ? S_OK : S_FALSE;
+}
+
+HRESULT tom_set_para(ITextRange2 *range, void *para)
+{
+    FMT *live;
+    HRESULT hr;
+    if (!para || !ours_para(para)) return E_INVALIDARG;
+    if (FAILED(hr = tom_format(FALSE, range, (void **)&live))) return hr;
+    hr = p_setdup(live, para);
+    f_release(live);
+    return hr;
+}
+
 #define N1x2 n1, n1
 #define N1x4 N1x2, N1x2
 #define N1x8 N1x4, N1x4
@@ -283,8 +359,9 @@ static HRESULT STDMETHODCALLTYPE c_set(FMT *f, LONG v) { f->cookie = v; return S
 /* ITextPara: 48 methods (GetDuplicate .. GetTab), then ITextPara2's 16 */
 static const void *const para_vtbl[] = {
     f_qi, f_addref, f_release, f_tcount, f_tinfo, f_ids, f_invoke,
-    n1, n1, n1, n2, n1,                           /* GetDuplicate, SetDuplicate, CanChange, IsEqual, Reset */
-    N1x16, N1x8, N1x4, n1, n1,                    /* GetStyle .. SetRightIndent (30) */
+    p_getdup, p_setdup, fo_canchange, p_isequal, n1,   /* GetDuplicate, SetDuplicate, CanChange, IsEqual, Reset */
+    n1, n1, p_getalign, p_setalign,               /* Get/SetStyle, Get/SetAlignment */
+    N1x16, N1x8, n1, n1,                          /* GetHyphenation .. SetRightIndent (26) */
     n3, n2,                                       /* SetIndents, SetLineSpacing */
     N1x4, n1, n1, n1,                             /* GetSpaceAfter .. GetTabCount (7) */
     n3, n0, n1, n4,                               /* AddTab, ClearAllTabs, DeleteTab, GetTab */
@@ -326,7 +403,7 @@ HRESULT tom_format(BOOL font, ITextRange2 *range, void **out)
     f->lpVtbl = font ? font_vtbl : para_vtbl;
     f->ref = 1;
     f->font = font;
-    if (font && range) {
+    if (range) {
         f->range = range;
         range->lpVtbl->AddRef(range);
     }

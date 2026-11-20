@@ -118,7 +118,7 @@ static ctl::ComPtr<xaml_controls::IPasswordBox> s_password;
 static ctl::ComPtr<xaml_controls::IRichEditBox> s_rich;
 static int s_password_changed, s_rich_changed;  /* their PasswordChanged and TextChanged counts */
 static int s_pasted, s_copied, s_cut;           /* the TextBox's Paste, CopyingToClipboard, CuttingToClipboard */
-#define LAST_STEP 26
+#define LAST_STEP 27
 /* (XAML text input, part 6: the text boxes' context menu) the watcher
  * thread's answer: 1 once a context menu opened (the "#32768" popup menu
  * window of the island's thread, which it then sent @s_menu_keys), -1 if
@@ -520,12 +520,30 @@ static void input_step(HWND top, HWND island)
         if (format) format->get_Bold(&bold);
         printf("xamlpagetest: RichEditBox selection Bold %d\n", static_cast<int>(bold));
         CHECK("Ctrl+B in the RichEditBox bolds the selection", bold == mut::FormatEffect_On);
+        /* (XAML text input, part 7: paragraph formats) Ctrl+E centres the
+         * selection's paragraph */
+        post_key(island, 'E', true);
+        break;
+    }
+    case 21: {
+        ctl::ComPtr<mut::ITextDocument> doc;
+        ctl::ComPtr<mut::ITextSelection> sel;
+        ctl::ComPtr<mut::ITextRange> range;
+        ctl::ComPtr<mut::ITextParagraphFormat> format;
+        mut::ParagraphAlignment align = mut::ParagraphAlignment_Undefined;
+        if (s_rich) s_rich->get_Document(&doc);
+        if (doc) doc->get_Selection(&sel);
+        if (sel) sel.As(&range);
+        CHECK_HR("Document.Selection.ParagraphFormat", range ? range->get_ParagraphFormat(&format) : E_FAIL);
+        if (format) format->get_Alignment(&align);
+        printf("xamlpagetest: RichEditBox paragraph alignment %d\n", static_cast<int>(align));
+        CHECK("Ctrl+E in the RichEditBox centres the paragraph", align == mut::ParagraphAlignment_Center);
         /* (XAML text input, part 6: the context menu) back to the TextBox,
          * the caret in its text */
         click(top, island, 24 + 100, 260 + 16);
         break;
     }
-    case 21: {
+    case 22: {
         CHECK("the click focuses the TextBox again", focused(s_box.Get()));
         CHECK("with nothing selected", selected_is(L""));
         /* the right button clicked in it: its context menu opens (the
@@ -539,22 +557,22 @@ static void input_step(HWND top, HWND island)
         PostMessageW(island, WM_RBUTTONUP, 0, at);
         break;
     }
-    case 22:
+    case 23:
         if (!s_menu_seen && ++s_menu_waits < 40) { s_step--; break; }   /* (the menu opens, then closes) */
         CHECK("the right button opens the TextBox's context menu", s_menu_seen == 1);
         CHECK("its Select All selects the text", selected_is(L"HiHi"));
         break;
-    case 23:
+    case 24:
         /* the menu key opens it too; Escape closes it, choosing nothing */
         start_watch(VK_ESCAPE, 0);
         post_key(island, VK_APPS);
         break;
-    case 24:
+    case 25:
         if (!s_menu_seen && ++s_menu_waits < 40) { s_step--; break; }
         CHECK("the menu key opens the TextBox's context menu", s_menu_seen == 1);
         CHECK("Escape closes it, the text and selection as they were", box_text_is(L"HiHi") && selected_is(L"HiHi"));
         break;
-    case 25: {
+    case 26: {
         CHECK("and the TextBox keeps the focus", focused(s_box.Get()));
         break;
     }

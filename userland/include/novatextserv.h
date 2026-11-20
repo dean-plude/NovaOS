@@ -79,14 +79,23 @@ typedef enum { TXTBACK_TRANSPARENT = 0, TXTBACK_OPAQUE = 1 } TXTBACKSTYLE;
 #define CFM_BOLD       0x00000001
 #define CFM_ITALIC     0x00000002
 #define CFM_UNDERLINE  0x00000004
+#define CFM_STRIKEOUT  0x00000008
 #define CFM_SIZE       0x80000000
 #define CFM_COLOR      0x40000000
 #define CFM_FACE       0x20000000
 #define CFE_BOLD       0x0001
 #define CFE_ITALIC     0x0002
 #define CFE_UNDERLINE  0x0004
+#define CFE_STRIKEOUT  0x0008
 #define CFE_AUTOCOLOR  0x40000000
 #define CFM_WEIGHT     0x00400000
+/* EM_SETCHARFORMAT / EM_GETCHARFORMAT wParam */
+#ifndef SCF_SELECTION
+#define SCF_DEFAULT    0x0000
+#define SCF_SELECTION  0x0001
+#define SCF_WORD       0x0002
+#define SCF_ALL        0x0004
+#endif
 
 /* ITextHost::TxGetPropertyBits and OnTxPropertyBitsChange */
 #define TXTBIT_RICHTEXT          0x00000001
@@ -166,6 +175,8 @@ typedef struct { UINT msg; WPARAM wparam; POINT pt, screenPtInRawPixels; BOOL is
 /* (and its DPI, which XAML sets to 96 and checks the answer of: NovaOS's
  * text services draw at the host's pixels and answer TRUE) */
 #define NOVA_EM_SETDPI      (WM_USER + 0x17d)
+/* a RichEditBox's formatting keys allowed (lp: CFE_BOLD, CFE_ITALIC, CFE_UNDERLINE) */
+#define NOVA_EM_SETFORMATACCELERATORS (WM_USER + 0x181)
 
 #define ENM_CHANGE          0x00000001
 #define ENM_UPDATE          0x00000002

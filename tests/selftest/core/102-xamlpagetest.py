@@ -12,7 +12,8 @@
 # Backspace, TextChanged and its text's pixels; then (part 4) Ctrl+A, Ctrl+C, Ctrl+V and Ctrl+X
 # in it through the clipboard with its Copying/Paste/Cutting events, a PasswordBox typed into
 # (its Password, PasswordChanged, its characters drawn, Ctrl+C copying nothing) and a
-# RichEditBox typed into (its Document's text, TextChanged, Ctrl+A and Ctrl+C)
+# RichEditBox typed into (its Document's text, TextChanged, Ctrl+A and Ctrl+C); then (part 5)
+# Ctrl+B bolds its selection, read back from Document.Selection.CharacterFormat.Bold
 DOC = ('`xamlpagetest` (a XAML page in a `Window`: the framework\'s desktop window, built from its sources, on the '
        'Windows App SDK\'s content islands as NovaOS\'s `Microsoft.UI.Input.dll` serves them (`ContentIsland`, '
        '`DesktopChildSiteBridge`, the island\'s input sources, `AppWindow`), showing a `Grid` with a `TextBlock` and a '
@@ -22,7 +23,8 @@ DOC = ('`xamlpagetest` (a XAML page in a `Window`: the framework\'s desktop wind
        'counted and its text found in its pixels, selected with Ctrl+A, copied, pasted and cut through the clipboard '
        '(its `CopyingToClipboard`, `Paste` and `CuttingToClipboard` events), a `PasswordBox` typed into (its `Password`, '
        '`PasswordChanged`, its password characters drawn, Ctrl+C copying nothing) and a `RichEditBox` typed into (its '
-       '`Document` text, `TextChanged`, Ctrl+A and Ctrl+C), then closed)')
+       '`Document` text, `TextChanged`, Ctrl+A and Ctrl+C, Ctrl+B bolding its selection as '
+       '`Document.Selection.CharacterFormat.Bold` reads back), then closed)')
 TESTS = [
     Test('xamlpagetest', 'xamlpagetest', [r'xamlpagetest: \d+ passed, 0 failed \(64-bit\)'], timeout=200,
          shot=r'xamlpagetest: page on screen'),

@@ -2042,5 +2042,21 @@ vendors.
    `ItemsStackPanel` from markup, `Orientation` `Horizontal`,
    `CacheLength` 2).
 
+   Pulsar item 3, thirtieth slice: the link buttons.  Calculator's page
+   shows links as `HyperlinkButton`s, whose constructor was an unbuilt
+   stand-in.  Vendored and built from microsoft-ui-xaml 866ba81:
+   `HyperLinkButton_Partial.cpp` and `HyperlinkButtonAutomationPeer`,
+   each with its generated class, `dxaml/lib/Launcher.cpp` (a clicked
+   link's `NavigateUri` opened through `Windows.System.Launcher`; it
+   takes `nova_async_info.h` first for its bare `IAsyncInfo`), and the
+   core's `core/text/TextBlock/Hyperlink.cpp` in the text library
+   (`CHyperlink`, whose `UnderlineVisibleResourceDirective` the button's
+   measure reads from the `HyperlinkUnderlineVisible` theme resource).
+   Calculator's page gets past its link buttons and stops next at
+   `CTextElementCollection`'s constructor (the base of a span's inline
+   collection; `core/text/RichTextArea/TextElementCollection.cpp` is not
+   vendored yet).  Test: `wuxamltest` (a `HyperlinkButton` from markup,
+   its `NavigateUri`'s host read back).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

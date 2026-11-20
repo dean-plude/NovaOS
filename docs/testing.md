@@ -220,7 +220,9 @@ fail and the rest run), ACPI test tables compiled from `tests/acpi/` with
   `LinearGradientBrush` from markup, as Calculator's page paints with,
   its `EndPoint` and its two `GradientStop`s read back; and an
   `ItemsStackPanel` from markup, the panel the `ListView`'s template
-  lays its items out in, its `Orientation` and `CacheLength` read back),
+  lays its items out in, its `Orientation` and `CacheLength` read back;
+  and a `HyperlinkButton` from markup, as Calculator's page shows its
+  links, made over `ButtonBase`, its `NavigateUri` read back),
   `xamlapptest` (Microsoft's XAML framework started as a desktop app
   starts it, built from its sources: `Application.Start` on the desktop
   path with a `DispatcherQueue`, the app's initialization callback

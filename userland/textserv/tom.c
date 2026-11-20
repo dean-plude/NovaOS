@@ -1422,7 +1422,21 @@ static HRESULT STDMETHODCALLTYPE d_preferred(ITextDocument2 *me, LONG cp, LONG c
     return E_NOTIMPL;
 }
 
-static HRESULT STDMETHODCALLTYPE d_getprop(ITextDocument2 *me, LONG type, LONG *v) { (void)me; (void)type; if (v) *v = 0; return E_INVALIDARG; }
+/* (the document's properties a text box's context menu asks: whether it
+ * can copy, undo and redo (tomTrue/tomFalse), and the undo limit) */
+static HRESULT STDMETHODCALLTYPE d_getprop(ITextDocument2 *me, LONG type, LONG *v)
+{
+    TS *t = DOC(me);
+    if (!v) return E_INVALIDARG;
+    *v = 0;
+    switch (type) {
+    case 137: *v = selmin(t) != selmax(t) && !(t->bits & TXTBIT_USEPASSWORD) ? tomTrue : tomFalse; return S_OK;  /* tomCanCopy */
+    case 138: *v = t->nredo > 0 ? tomTrue : tomFalse; return S_OK;                                              /* tomCanRedo */
+    case 139: *v = t->nundo > 0 ? tomTrue : tomFalse; return S_OK;                                              /* tomCanUndo */
+    case 140: *v = t->undolimit; return S_OK;                                                                   /* tomUndoLimit */
+    }
+    return E_INVALIDARG;
+}
 static HRESULT STDMETHODCALLTYPE d_setprop(ITextDocument2 *me, LONG type, LONG v) { (void)me; (void)type; (void)v; return E_INVALIDARG; }
 static HRESULT STDMETHODCALLTYPE d_notify(ITextDocument2 *me, LONG v) { (void)me; (void)v; return S_OK; }
 static HRESULT STDMETHODCALLTYPE d_releasecm(ITextDocument2 *me, IUnknown *p) { (void)me; (void)p; return S_OK; }

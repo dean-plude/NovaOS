@@ -851,6 +851,33 @@ static LONG copy_out(TS *t, LONG a, LONG b, BOOL crlf, WCHAR *out, LONG cap)
 
 typedef struct { CHARRANGE chrg; LPWSTR text; } TEXTRANGEW_;
 
+/* ---- the context menu ---------------------------------------------------- */
+/* Rich Edit's context menu: the host's OLE callback is asked for one
+ * (IRichEditOleCallback::GetContextMenu) with the selection's type and
+ * range; for the mouse (@mouse), GCM_MOUSEMENU and the pointer's point
+ * @pt (GETCONTEXTMENUEX), else, the menu key's, none.  XAML's text boxes
+ * raise their ContextMenuOpening event from it and show their menu
+ * themselves (it gives no HMENU back).  Not with RTO_DISABLECONTEXTMENU
+ * (a text box with a ContextFlyout of its own), nor without a callback */
+static BOOL context_menu(TS *t, BOOL mouse, POINT pt)
+{
+    if (!t->olecb || (t->touchopts & RTO_DISABLECONTEXTMENU)) return FALSE;
+    NOVA_GETCONTEXTMENUEX ex;
+    memset(&ex, 0, sizeof ex);
+    ex.chrg.cpMin = selmin(t);
+    ex.chrg.cpMax = selmax(t);
+    ex.dwFlags = mouse ? GCM_MOUSEMENU : 0;
+    ex.pt = pt;
+    WORD seltype = (WORD)((ex.chrg.cpMin == ex.chrg.cpMax ? SEL_EMPTY : SEL_TEXT) | (mouse ? GCM_MOUSEMENU : 0));
+    HMENU menu = 0;
+    IRichEditOleCallback_ *cb = t->olecb;
+    cb->lpVtbl->AddRef(cb);
+    HRESULT hr = cb->lpVtbl->GetContextMenu(cb, seltype, 0, &ex.chrg, &menu);
+    cb->lpVtbl->Release(cb);
+    if (SUCCEEDED(hr) && menu) DestroyMenu(menu);  /* (a menu of the host's own: not shown by the windowless control) */
+    return SUCCEEDED(hr);
+}
+
 /* ---- TxSendMessage ------------------------------------------------------ */
 static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
 {
@@ -905,6 +932,22 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         if (t->dragging && t->host) HOST(t)->TxSetCapture(t->host, FALSE);
         t->dragging = FALSE;
         break;
+    case WM_RBUTTONDOWN: {                        /* (as Rich Edit: outside the selection, the caret moves there) */
+        LONG cp = hit(t, (short)LOWORD(lp), (short)HIWORD(lp));
+        if (t->host && !t->focus) HOST(t)->TxSetFocus(t->host);
+        if (cp < selmin(t) || cp > selmax(t) || selmin(t) == selmax(t)) set_sel(t, cp, cp);
+        break;
+    }
+    case WM_RBUTTONUP: {                          /* (a XAML text box sends it for the mouse's, and a pen's RightTapped) */
+        POINT pt = { (short)LOWORD(lp), (short)HIWORD(lp) };
+        if (!context_menu(t, TRUE, pt)) hr = S_FALSE;
+        break;
+    }
+    case WM_KEYUP: {
+        POINT none = { 0, 0 };
+        if (wp != VK_APPS || !context_menu(t, FALSE, none)) hr = S_FALSE;
+        break;
+    }
     case WM_SETTEXT:
         set_text(t, (const WCHAR *)lp, -1);
         r = TRUE;
@@ -1169,8 +1212,21 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         if (t->len) { r = 1; break; }             /* (only while empty, as Rich Edit) */
         t->textmode = (DWORD)wp;
         break;
-    case EM_AUTOURLDETECT: case EM_SETOLECALLBACK: case EM_HIDESELECTION:
-        r = msg == EM_SETOLECALLBACK;
+    case EM_AUTOURLDETECT: case EM_HIDESELECTION:
+        break;
+    case EM_SETOLECALLBACK: {                     /* (held, as Rich Edit holds it) */
+        IRichEditOleCallback_ *cb = (IRichEditOleCallback_ *)lp;
+        if (cb) cb->lpVtbl->AddRef(cb);
+        if (t->olecb) t->olecb->lpVtbl->Release(t->olecb);
+        t->olecb = cb;
+        r = TRUE;
+        break;
+    }
+    case EM_SETTOUCHOPTIONS:
+        if (wp) t->touchopts = lp ? t->touchopts | (DWORD)wp : t->touchopts & ~(DWORD)wp;
+        break;
+    case EM_GETTOUCHOPTIONS:
+        r = (t->touchopts & (DWORD)wp) != 0;
         break;
     case EM_GETOLEINTERFACE:                      /* IRichEditOle, whose QueryInterface gives the TOM */
         if (!lp) break;
@@ -1611,6 +1667,7 @@ static ULONG STDMETHODCALLTYPE in_release(IUnknown *me)
     TS *t = FROM_INNER(me);
     LONG r = InterlockedDecrement(&t->ref);
     if (!r) {
+        if (t->olecb) t->olecb->lpVtbl->Release(t->olecb);
         tom_free(t);
         dw_free(t);
         clear_stack(t->undo, &t->nundo);

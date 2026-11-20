@@ -859,7 +859,20 @@ vendors.
      Ctrl+B, I and U (as `EM_SETFORMATACCELERATORS` allows); a TOM
      range's `ITextFont` is live over its characters (`tomfmt.c`), and
      the Windows Runtime range's `CharacterFormat` is that font as
-     `Microsoft.UI.Text.ITextCharacterFormat` (`winrtfmt.c`).
+     `Microsoft.UI.Text.ITextCharacterFormat` (`winrtfmt.c`).  The
+     context menu (part 6): `WinUIEdit.dll` asks the host's OLE callback
+     (`IRichEditOleCallback::GetContextMenu`, with `GCM_MOUSEMENU` and the
+     point) when the right button or the menu key is let go, unless `EM_SETTOUCHOPTIONS` turned it off with
+     `RTO_DISABLECONTEXTMENU` (a text box with a `ContextFlyout`).  XAML's
+     callback raises the box's `ContextMenuOpening`, and when no handler
+     takes it, `TextContextMenu` (vendored) shows Cut, Copy, Paste, Undo,
+     Redo and Select All as it allows on `Windows.UI.Popups.PopupMenu`,
+     which `twinapi.appcore.dll` serves (`popups.c`: a user32 popup menu
+     opened from the thread's message loop, the chosen `UICommand`'s
+     `Invoked` handler, then the operation's `Completed`).  The
+     resources still leave out the text boxes' `ContextFlyout` setters
+     (`TextCommandBarFlyout`, of WinUI's controls library, which needs
+     `CommandBar`): that is what Windows 10 shows, and the next part.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

@@ -71,6 +71,9 @@ typedef struct TS {
     DWORD accels;                                 /* the formatting keys allowed (EM_SETFORMATACCELERATORS) */
     HFONT fonts[4];                               /* GDI's fonts by key (bold 1, italic 2) */
     IUnknown *faces[4];                           /* DirectWrite's faces by key */
+    /* the context menu (XAML text input, part 6) */
+    IRichEditOleCallback_ *olecb;                 /* EM_SETOLECALLBACK's, held */
+    DWORD touchopts;                              /* EM_SETTOUCHOPTIONS' (RTO_DISABLECONTEXTMENU) */
 } TS;
 
 #define FROM_IFACE(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, iface)))

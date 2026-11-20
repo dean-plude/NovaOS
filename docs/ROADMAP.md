@@ -1274,7 +1274,11 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   (with their `Paste`, `CopyingToClipboard` and `CuttingToClipboard`
   events).  Since 11-19 a `RichEditBox`'s text has character formats
   (bold, italic, underline, strikethrough, colour) from Ctrl+B, I and U
-  and from its `Document`'s `CharacterFormat`.
+  and from its `Document`'s `CharacterFormat`.  Since 11-20 the text boxes
+  have a right-click menu (Cut, Copy, Paste, Undo, Redo, Select All, also
+  from the menu key) on `Windows.UI.Popups`' `PopupMenu`; WinUI's text
+  command bar flyout, which Windows 10 shows instead, needs `CommandBar`
+  and comes later.
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

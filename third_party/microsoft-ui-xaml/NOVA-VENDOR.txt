@@ -483,6 +483,13 @@ RichEditBox_Partial.cpp and Launcher.h; and winrtgeneratedclasses' .g.cpp
 of PasswordBox, PasswordBoxPasswordChangingEventArgs, RichEditBox,
 RichEditBoxSelectionChangingEventArgs and RichEditBoxTextChangingEventArgs.
 
+XAML text input, sixth part (the text boxes' context menu), the same
+commit, unchanged (upstream line endings): core/native/text/Controls'
+TextContextMenu.cpp, TextContextMenuCommandHandler.cpp,
+TextBlockCommandHandler.cpp and RichTextBlockCommandHandler.cpp; dxaml/lib's
+ContextRequestedEventArgs_Partial.cpp and winrtgeneratedclasses'
+ContextRequestedEventArgs.g.cpp.
+
 tools/winrt/abigen.py turns the IDL into the C++ ABI headers MIDL would
 make (MIDL is not used).  Features FeatureFlags.h marks AlwaysDisabled are
 left out, as MIDL leaves them out of the public metadata; Feature_HeaderPlacement

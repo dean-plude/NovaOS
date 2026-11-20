@@ -41,6 +41,17 @@
  * Automation, which XAML handles as a click on it) */
 #define EM_SETFORMATACCELERATORS    (WM_USER + 0x181)
 #define EM_HANDLELINKNOTIFICATION   (WM_USER + 0x182)
+/* the spelling items of a text box's context menu (TextContextMenu.cpp):
+ * the command XAML sends for the one chosen (wp: MAKEWPARAM(cp, SCI_*),
+ * lp: the suggestion for SCI_REPLACE); NovaOS's text services have no
+ * spelling checker yet and leave it unanswered */
+#define EM_SPELLCHECKINVOKE         (WM_USER + 0x183)
+#define SCI_REPLACE                 1
+#define SCI_ADDTODICTIONARY         2
+#define SCI_IGNORE                  3
+#define SCI_DELETEREPEATED          4
+#define SCI_IGNOREONCE              5
+#define SCI_STOPCORRECTING          6
 /* (the host's answer to EN_LINK: let the Rich Edit do what it does) */
 #define EN_LINK_DO_DEFAULT          S_FALSE
 #ifndef IMF_COPYPLAINTEXTONLY

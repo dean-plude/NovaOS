@@ -216,6 +216,14 @@ void measure(TS *t, HDC dc, LONG start, LONG n, int *dx, SIZE *sz)
     if (s != stackbuf) release(s);
 }
 
+/* (the shift of a line of width @lw in @w: its paragraph's alignment, @align) */
+static LONG align_shift(int align, LONG lw, LONG w)
+{
+    LONG d = w - lw;
+    if (w <= 0 || d <= 0) return 0;
+    return align == PFA_CENTER ? d / 2 : align == PFA_RIGHT ? d - 1 : 0;
+}
+
 static void add_line(TS *t, LONG start, LONG len, LONG width)
 {
     if (t->nlines == t->linecap) {
@@ -229,6 +237,7 @@ static void add_line(TS *t, LONG start, LONG len, LONG width)
     t->lines[t->nlines].start = start;
     t->lines[t->nlines].len = len;
     t->lines[t->nlines].width = width;
+    t->lines[t->nlines].shift = 0;
     t->nlines++;
 }
 
@@ -247,8 +256,10 @@ static void layout(TS *t, HDC dc, LONG width)
         t->ascent = tm.tmAscent > 0 ? tm.tmAscent : 12;
     }
     t->nlines = 0;
+    t->aligned = FALSE;
     for (;;) {
         LONG e = p, n;
+        int first = t->nlines, align, i;
         while (e < t->len && t->text[e] != L'\r') e++;
         n = e - p;
         if (n == 0) add_line(t, p, 0, 0);
@@ -271,12 +282,26 @@ static void layout(TS *t, HDC dc, LONG width)
             }
             release(dx);
         }
+        /* the paragraph's lines move right as its alignment says */
+        align = para_align(t, p);
+        if (align == PFA_CENTER || align == PFA_RIGHT) {
+            t->aligned = TRUE;
+            for (i = first; i < t->nlines; i++) t->lines[i].shift = align_shift(align, t->lines[i].width, width);
+        }
         if (e >= t->len) break;
         p = e + 1;
     }
+    t->alignw = width;
     SelectObject(dc, old);
     t->layoutw = wrap ? width : 0;
     t->dirty = FALSE;
+}
+
+/* the lines must be laid out again for width @w */
+static BOOL stale(TS *t, LONG w)
+{
+    return t->dirty || !t->nlines || ((t->bits & TXTBIT_WORDWRAP) && (t->bits & TXTBIT_MULTILINE) && w != t->layoutw)
+        || (t->aligned && w != t->alignw);
 }
 
 void client_rect(TS *t, RECT *rc)
@@ -298,7 +323,7 @@ void ensure_layout(TS *t)
     LONG w;
     client_rect(t, &rc);
     w = rc.right - rc.left;
-    if (t->dirty || !t->nlines || ((t->bits & TXTBIT_WORDWRAP) && (t->bits & TXTBIT_MULTILINE) && w != t->layoutw)) {
+    if (stale(t, w)) {
         BOOL host;
         HDC dc = get_dc(t, &host);
         layout(t, dc, w);
@@ -314,25 +339,27 @@ int line_of(TS *t, LONG cp)
     return t->nlines - 1;
 }
 
-/* x of character position @cp within its line (from the line's start) */
+/* x of character position @cp within its line (from the line's start, as
+ * aligned) */
 LONG x_of(TS *t, LONG cp)
 {
     int l = line_of(t, cp);
-    LONG n = cp - t->lines[l].start, x = 0;
+    LONG n = cp - t->lines[l].start, x = t->lines[l].shift;
     if (n > 0) {
         BOOL host;
         HDC dc = get_dc(t, &host);
         HGDIOBJ old = SelectObject(dc, t->font);
         SIZE sz;
         measure(t, dc, t->lines[l].start, n, 0, &sz);
-        x = sz.cx;
+        x += sz.cx;
         SelectObject(dc, old);
         put_dc(t, dc, host);
     }
     return x;
 }
 
-/* the character position on line @l nearest x (from the line's start) */
+/* the character position on line @l nearest x (from the line's start, as
+ * aligned) */
 LONG cp_at_x(TS *t, int l, LONG x)
 {
     LINE *ln = &t->lines[l];
@@ -341,6 +368,7 @@ LONG cp_at_x(TS *t, int l, LONG x)
     HDC dc;
     HGDIOBJ old;
     int *dx;
+    x -= ln->shift;
     if (x <= 0 || !ln->len) return ln->start;
     if (!(dx = alloc(ln->len * sizeof(int)))) return ln->start;
     dc = get_dc(t, &host);
@@ -467,6 +495,7 @@ static BOOL snap_take(TS *t, SNAP *s)
     memcpy(s->text, t->text, t->len * sizeof(WCHAR));
     if (t->fmt) memcpy(s->fmt, t->fmt, t->len);
     s->len = t->len;
+    s->lastalign = t->lastalign;
     s->anchor = t->anchor;
     s->active = t->active;
     return TRUE;
@@ -511,6 +540,7 @@ static void restore(TS *t, SNAP *s)
         memcpy(t->fmt, s->fmt, s->len);
         t->len = s->len;
     }
+    t->lastalign = s->lastalign;
     t->anchor = s->anchor;
     t->active = s->active;
     snap_free(s);
@@ -564,9 +594,9 @@ static LONG normalise(TS *t, const WCHAR *s, LONG n, WCHAR *out)
  * or -1 when nothing changed */
 LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL typed)
 {
-    LONG k, room;
+    LONG k, room, i;
     WCHAR *norm;
-    int f;
+    int f, fr;
     if (a < 0) a = 0;
     if (b > t->len) b = t->len;
     if (a > b) a = b;
@@ -584,10 +614,14 @@ LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL t
     else if (!typed) { clear_stack(t->undo, &t->nundo); clear_stack(t->redo, &t->nredo); }
     if (!reserve(t, t->len - (b - a) + k)) { release(norm); return -1; }
     f = fmt_insertion(t, a, b);                   /* (rich text's: runs.c) */
+    /* (a paragraph mark put in splits the paragraph the text goes into:
+     * both parts keep its alignment) */
+    fr = RICH(t) ? fmt_with_align(t, f, para_own(t, b)) : f;
     memmove(t->text + a + k, t->text + b, (t->len - b) * sizeof(WCHAR));
     memcpy(t->text + a, norm, k * sizeof(WCHAR));
     memmove(t->fmt + a + k, t->fmt + b, t->len - b);
     memset(t->fmt + a, f, k);
+    for (i = 0; i < k; i++) if (norm[i] == L'\r') t->fmt[a + i] = (BYTE)fr;
     if (k) t->insfmt = -1;
     t->len += k - (b - a);
     t->typing = typed;
@@ -811,6 +845,15 @@ static HRESULT on_key(TS *t, UINT vk)
         case 'V': key_paste(t); return S_OK;
         case 'Z': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, FALSE); return S_OK;
         case 'Y': if (!(t->bits & TXTBIT_READONLY)) undo_redo(t, TRUE); return S_OK;
+        case 'L': case 'E': case 'R': case 'J': {  /* (rich text's alignment keys) */
+            int al = vk == 'L' ? PFA_LEFT : vk == 'E' ? PFA_CENTER : vk == 'R' ? PFA_RIGHT : PFA_JUSTIFY;
+            if (!RICH(t) || shift) return S_FALSE;
+            if (!(t->bits & TXTBIT_READONLY) && para_apply(t, selmin(t), selmax(t), al)) {
+                ensure_layout(t);
+                update_caret(t);
+            }
+            return S_OK;
+        }
         case 'B': case 'I': case 'U': {           /* (rich text's formatting keys) */
             DWORD e = vk == 'B' ? CFE_BOLD : vk == 'I' ? CFE_ITALIC : CFE_UNDERLINE;
             if (!RICH(t) || !(t->accels & e) || shift) return S_FALSE;
@@ -1173,14 +1216,30 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         t->accels = (DWORD)lp & (CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE);
         r = 1;
         break;
-    case EM_GETPARAFORMAT: {
+    case EM_GETPARAFORMAT: {                      /* (the selection's paragraphs: their alignment) */
         PARAFORMAT *pf = (PARAFORMAT *)lp;
-        if (pf && pf->cbSize >= sizeof(UINT) + sizeof(DWORD)) { pf->dwMask = 0; }
+        if (pf && pf->cbSize >= sizeof(PARAFORMAT) - sizeof(pf->rgxTabs)) {
+            int a = para_query(t, selmin(t), selmax(t));
+            pf->dwMask = a ? PFM_ALIGNMENT : 0;
+            pf->wAlignment = (WORD)(a ? a : para_align(t, selmin(t)));
+            r = pf->dwMask;
+        }
         break;
     }
-    case EM_SETPARAFORMAT:
+    case EM_SETPARAFORMAT: {                      /* (the alignment; SPF_SETDEFAULT: the default's) */
+        const PARAFORMAT *pf = (const PARAFORMAT *)lp;
         r = TRUE;
+        if (!pf || pf->cbSize < sizeof(PARAFORMAT) - sizeof(pf->rgxTabs) || !(pf->dwMask & PFM_ALIGNMENT)) break;
+        if (pf->wAlignment < PFA_LEFT || pf->wAlignment > PFA_JUSTIFY) { r = FALSE; break; }
+        if (wp & SPF_SETDEFAULT) {                /* (plain text's one paragraph format is the default) */
+            t->defalign = pf->wAlignment;
+            if (!RICH(t)) t->lastalign = 0;
+            t->dirty = TRUE;
+            redraw(t);
+        } else r = para_apply(t, selmin(t), selmax(t), pf->wAlignment);
+        if (r && t->focus) update_caret(t);
         break;
+    }
     case EM_GETOPTIONS:
         r = t->options;
         break;
@@ -1302,14 +1361,12 @@ static void draw(TS *t, HDC dc, const RECT *bounds)
     }
     /* the text lays out in the drawn rectangle */
     (void)cl;
-    if (t->dirty || !t->nlines
-        || ((t->bits & TXTBIT_MULTILINE) && (t->bits & TXTBIT_WORDWRAP) && t->layoutw != rc.right - rc.left))
-        layout(t, dc, rc.right - rc.left);
+    if (stale(t, rc.right - rc.left)) layout(t, dc, rc.right - rc.left);
     old = SelectObject(dc, t->font);
     SetBkMode(dc, TRANSPARENT);
     for (i = 0; i < t->nlines; i++) {
         LINE *ln = &t->lines[i];
-        LONG y = rc.top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc.left - t->scrollx;
+        LONG y = rc.top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc.left - t->scrollx + ln->shift;
         WCHAR stackbuf[256], *s = stackbuf;
         int *dx = 0;
         if (y + t->lineh <= rc.top || y >= rc.bottom) continue;
@@ -1498,6 +1555,7 @@ static HRESULT TXAPI ts_bits(ITextServices2 *me, DWORD mask, DWORD bits)
     TS *t = FROM_IFACE(me);
     t->bits = (t->bits & ~mask) | (bits & mask);
     if (mask & TXTBIT_CHARFORMATCHANGE) refresh_format(t);
+    if (mask & TXTBIT_PARAFORMATCHANGE) para_refresh(t);
     if (mask & (TXTBIT_MAXLENGTHCHANGE | TXTBIT_USEPASSWORD)) {
         DWORD max = 0;
         WCHAR ch = 0;
@@ -1597,9 +1655,7 @@ static HRESULT TXAPI ts_drawd2d(ITextServices2 *me, ID2D1RenderTarget_ *rt, LPCR
     if (t->face) {
         /* the host's DirectWrite face: glyph runs (dwtext.c), laid out for
          * the drawn width first, as draw() does */
-        if (t->dirty || !t->nlines
-            || ((t->bits & TXTBIT_MULTILINE) && (t->bits & TXTBIT_WORDWRAP) && t->layoutw != w))
-            layout(t, dc, w);
+        if (stale(t, w)) layout(t, dc, w);
         return dw_draw(t, rt, &rc, back == TXTBACK_OPAQUE);
     }
     if (!(colour = dib(dc, w, h, &cbits))) return E_OUTOFMEMORY;
@@ -1711,6 +1767,7 @@ __declspec(dllexport) HRESULT WINAPI CreateTextServices(IUnknown *outer, ITextHo
     tom_init(t);
     refresh_bits(t);
     refresh_format(t);
+    para_refresh(t);
     *out = &t->inner;
     return S_OK;
 }

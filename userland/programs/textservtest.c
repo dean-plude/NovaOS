@@ -1186,6 +1186,147 @@ static void formatting(HDC dc)
     msg(WM_SETTEXT, 0, (LPARAM)L"");
 }
 
+/* ---- paragraphs' alignment (XAML text input, part 7) -------------------- */
+static LRESULT set_align(WPARAM wp, WORD a)
+{
+    PARAFORMAT pf;
+    memset(&pf, 0, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_ALIGNMENT;
+    pf.wAlignment = a;
+    return msg(EM_SETPARAFORMAT, wp, (LPARAM)&pf);
+}
+static WORD align_of(LONG a, LONG b, DWORD *mask)
+{
+    PARAFORMAT pf;
+    memset(&pf, 0, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    set_sel(a, b);
+    msg(EM_GETPARAFORMAT, 0, (LPARAM)&pf);
+    if (mask) *mask = pf.dwMask;
+    return pf.wAlignment;
+}
+static int leftmost_dark(int rows)                /* (in the first @rows rows; -1: none) */
+{
+    int x, y;
+    for (x = 0; x < BW; x++)
+        for (y = 0; y < rows && y < BH; y++) {
+            DWORD p = bits_of[y * BW + x];
+            if (((p >> 16) & 0xff) < 128 && ((p >> 8) & 0xff) < 128 && (p & 0xff) < 128) return x;
+        }
+    return -1;
+}
+#define PSLOT(p, i, type) SLOT(p, 7 + (i), type)  /* (ITextPara's methods after IDispatch's) */
+static void alignment(HDC dc)
+{
+    static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+    static const IID iid_wdoc = {0x1149d57d, 0x86a6, 0x59dd, {0x88, 0xd9, 0x19, 0x6f, 0x27, 0xbc, 0x5c, 0x85}};
+    DWORD bits = host.bits, mask = 0;
+    ITextDocument2 *d = 0;
+    ITextRange2 *r = 0, *r2 = 0;
+    IUnknown *para = 0, *dup = 0, *doc = 0, *wr = 0, *wpf = 0;
+    LONG v = -1;
+    INT32 pa = -1;
+    int x0, x1;
+
+    host.bits |= TXTBIT_RICHTEXT | TXTBIT_MULTILINE;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
+    set_sel(0, 0);
+    draw(dc);
+    x0 = leftmost_dark(12);
+    check("paragraphs are left-aligned by default", align_of(0, 0, &mask) == PFA_LEFT && (mask & PFM_ALIGNMENT) && x0 >= 0 && x0 < 10);
+    set_sel(1, 1);
+    check("EM_SETPARAFORMAT(PFM_ALIGNMENT) centres the caret's paragraph", set_align(0, PFA_CENTER) != 0);
+    set_sel(0, 0);
+    draw(dc);
+    x1 = leftmost_dark(12);
+    check("... it is drawn centred", x1 > 80 && x1 < 140);
+    check("... and the caret moves with it", host.caret.x > 80);
+    check("EM_GETPARAFORMAT: the first paragraph centred, the second still left",
+          align_of(1, 1, 0) == PFA_CENTER && align_of(4, 4, 0) == PFA_LEFT);
+    align_of(0, 5, &mask);
+    check("... over both: the alignment undefined (PFM_ALIGNMENT clear)", !(mask & PFM_ALIGNMENT));
+    set_sel(2, 2);
+    type(L"\r");
+    check("Enter in a centred paragraph: both parts centred",
+          align_of(0, 0, 0) == PFA_CENTER && align_of(3, 3, 0) == PFA_CENTER && align_of(5, 5, 0) == PFA_LEFT);
+    ctrl_key('Z');
+    set_sel(4, 4);
+    ctrl_key('R');
+    check("Ctrl+R right-aligns the last paragraph", align_of(4, 4, 0) == PFA_RIGHT && align_of(0, 0, 0) == PFA_CENTER);
+    set_sel(4, 4);
+    ctrl_key('L');
+    check("Ctrl+L: left again", align_of(4, 4, 0) == PFA_LEFT);
+    ctrl_key('Z');
+    check("Ctrl+Z undoes an alignment", align_of(4, 4, 0) == PFA_RIGHT);
+    /* the Text Object Model's paragraph: live over its range */
+    ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+    if (d) d->lpVtbl->Range2(d, 0, 0, &r);
+    if (r) r->lpVtbl->GetPara(r, (void **)&para);
+    check("ITextRange.GetPara", para != 0);
+    if (para) {
+        PSLOT(para, 7, HRESULT (STDMETHODCALLTYPE *)(void *, LONG *))(para, &v);           /* GetAlignment */
+        check("ITextPara.GetAlignment: tomAlignCenter", v == 1);
+        PSLOT(para, 0, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(para, (void **)&dup);   /* GetDuplicate */
+        r->lpVtbl->SetEnd(r, 5);
+        PSLOT(para, 7, HRESULT (STDMETHODCALLTYPE *)(void *, LONG *))(para, &v);
+        check("... live: the range moved over both paragraphs, tomUndefined", v == tomUndefined);
+        PSLOT(para, 8, HRESULT (STDMETHODCALLTYPE *)(void *, LONG))(para, 3);              /* SetAlignment(tomAlignJustify) */
+        check("ITextPara.SetAlignment aligns the range's paragraphs",
+              align_of(0, 0, 0) == PFA_JUSTIFY && align_of(4, 4, 0) == PFA_JUSTIFY);
+        if (dup && d) d->lpVtbl->Range2(d, 4, 4, &r2);
+        if (r2) {
+            r2->lpVtbl->SetPara(r2, dup);
+            check("ITextRange.SetPara applies a duplicate (centred)", align_of(4, 4, 0) == PFA_CENTER && align_of(0, 0, 0) == PFA_JUSTIFY);
+            r2->lpVtbl->Release(r2);
+        } else check("ITextPara.GetDuplicate", 0);
+        if (dup) dup->lpVtbl->Release(dup);
+        para->lpVtbl->Release(para);
+    }
+    if (r) r->lpVtbl->Release(r);
+    if (d) d->lpVtbl->Release(d);
+    /* the Windows Runtime's: a RichEditBox's Document.GetRange(..).ParagraphFormat */
+    ts->lpVtbl->QueryInterface(ts, &iid_wdoc, (void **)&doc);
+    if (doc) WSLOT(doc, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, void **))(doc, 0, 1, (void **)&wr);
+    if (wr) WSLOT(wr, 13, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(wr, (void **)&wpf);   /* get_ParagraphFormat */
+    check("ITextRange.ParagraphFormat", wpf != 0);
+    if (wpf) {
+        WSLOT(wpf, 0, HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))(wpf, &pa);              /* get_Alignment */
+        check("ITextParagraphFormat.Alignment: Justify", pa == 4);
+        WSLOT(wpf, 1, HRESULT (STDMETHODCALLTYPE *)(void *, INT32))(wpf, 3);                  /* put_Alignment(Right) */
+        check("ITextParagraphFormat.Alignment = Right aligns the paragraph", align_of(0, 0, 0) == PFA_RIGHT);
+        set_sel(0, 0);
+        draw(dc);
+        check("... drawn at the right", leftmost_dark(12) > 180);
+        wpf->lpVtbl->Release(wpf);
+    }
+    if (wr) wr->lpVtbl->Release(wr);
+    if (doc) doc->lpVtbl->Release(doc);
+    /* plain text (a TextBox): one paragraph format; TextAlignment comes as
+     * SPF_SETDEFAULT, or the host's TxGetParaFormat */
+    host.bits &= ~(TXTBIT_RICHTEXT | TXTBIT_MULTILINE);
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab");
+    set_align(SPF_SETDEFAULT, PFA_RIGHT);
+    set_sel(0, 0);
+    draw(dc);
+    check("plain text: SPF_SETDEFAULT right-aligns it", align_of(0, 0, 0) == PFA_RIGHT && leftmost_dark(12) > 180);
+    host.pf.dwMask = PFM_ALIGNMENT;
+    host.pf.wAlignment = PFA_CENTER;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_PARAFORMATCHANGE, TXTBIT_PARAFORMATCHANGE);
+    set_sel(0, 0);
+    draw(dc);
+    x1 = leftmost_dark(12);
+    check("the host's TxGetParaFormat (TXTBIT_PARAFORMATCHANGE) centres it", align_of(0, 0, 0) == PFA_CENTER && x1 > 80 && x1 < 140);
+    host.pf.wAlignment = PFA_LEFT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_PARAFORMATCHANGE, TXTBIT_PARAFORMATCHANGE);
+    host.pf.dwMask = 0;
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.bits = bits;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -1229,6 +1370,7 @@ int main(void)
     context_menu();
     winrt();
     formatting(dc);
+    alignment(dc);
     drawd2d(dc);
     others();
 

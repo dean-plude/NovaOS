@@ -500,6 +500,7 @@ static HRESULT STDMETHODCALLTYPE r_getobj(ITextRange2 *me, void **out) { (void)m
 static HRESULT STDMETHODCALLTYPE r_getfont(ITextRange2 *me, void **out) { LIVE(R(me)); return tom_format(TRUE, me, out); }
 static HRESULT STDMETHODCALLTYPE r_getpara(ITextRange2 *me, void **out) { LIVE(R(me)); return tom_format(FALSE, me, out); }
 static HRESULT STDMETHODCALLTYPE r_setfont(ITextRange2 *me, void *font) { LIVE(R(me)); return tom_set_font(me, font); }
+static HRESULT STDMETHODCALLTYPE r_setpara(ITextRange2 *me, void *para) { LIVE(R(me)); return tom_set_para(me, para); }
 
 TS *tom_range_ts(ITextRange2 *r)
 {
@@ -1179,7 +1180,7 @@ static const ITextRange2Vtbl range_vtbl = {
     r_tcount, r_tinfo, r_ids, r_invoke,
     /* ITextRange */
     r_gettext, r_settext, r_getchar, r_setchar, r_dup, r_getformatted, r_setformatted,
-    r_getstart, r_setstart, r_getend, r_setend, r_getfont, r_setfont, r_getpara, r_setobj,
+    r_getstart, r_setstart, r_getend, r_setend, r_getfont, r_setfont, r_getpara, r_setpara,
     r_storylen, r_storytype, r_collapse, r_expand, r_getindex, r_setindex, r_setrange,
     r_inrange, r_instory, r_isequal, r_select, r_startof, r_endof, r_move, r_movestart, r_moveend,
     r_movecset, r_movecset, r_movecset, r_movecset, r_movecset, r_movecset,
@@ -1189,7 +1190,7 @@ static const ITextRange2Vtbl range_vtbl = {
     r_getflags, r_setflags, r_gettype, r_left, r_right, r_up, r_down, r_home, r_end, r_typetext,
     /* ITextRange2 */
     r_getcch, r_getunk, r_getunk, r_getcount, r_dup2, r_getfont, r_setfont, r_getformatted2, r_setformatted2,
-    r_getgravity, r_setgravity, r_getpara, r_setobj, r_getobj, r_startpara, r_getunk, r_geturl, r_setbstr,
+    r_getgravity, r_setgravity, r_getpara, r_setpara, r_getobj, r_startpara, r_getunk, r_geturl, r_setbstr,
     r_addsub, r_long1, r_long2, r_find2, r_getchar2, r_dropcap, r_getinline, r_getprop, r_getrect,
     r_getsub, r_gettext2, r_void, r_long3, r_long1, r_setsub, r_long2, r_setprop, r_settext2, r_void,
     r_setinline, r_mathtype, r_image,

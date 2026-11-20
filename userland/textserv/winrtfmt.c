@@ -9,7 +9,10 @@
  * size are read; the effects not kept (all caps, hidden, outline, small
  * caps, subscript, superscript, protected) read Off and setting them does
  * nothing, as do kerning, spacing, position, the language and the
- * background colour.  Written from the Windows App SDK's Microsoft.UI.Text
+ * background colour.  A range's ParagraphFormat (ITextParagraphFormat) is
+ * the same over TOM's ITextPara2: its alignment is the range's paragraphs'
+ * (Left, Center, Right, Justify); indents, spacing, lists and tabs read 0
+ * or Off and setting them does nothing.  Written from the Windows App SDK's Microsoft.UI.Text
  * documentation; the methods in Microsoft.UI.Text.winmd's order.
  */
 #include "tsint.h"
@@ -283,4 +286,149 @@ HRESULT wfmt_wrap(void *tomfont, void **out)
 void *wfmt_tom(void *format)
 {
     return (format && W(format)->vtbl == wcf_vtbl) ? W(format)->tom : 0;
+}
+
+/* ---- Microsoft.UI.Text.ITextParagraphFormat {219b6cdf-0d0b-5701-b8a1-6c906b3ebbe1} ---- */
+static const IID iid_wpf = {0x219b6cdf, 0x0d0b, 0x5701, {0xb8, 0xa1, 0x6c, 0x90, 0x6b, 0x3e, 0xbb, 0xe1}};
+
+/* the TOM paragraph's methods, by slot after IDispatch's */
+#define PARA(me, i, type) ((type)((*(void ***)W(me)->tom)[7 + (i)]))
+#define P_GETDUP 0
+#define P_SETDUP 1
+#define P_ISEQUAL 3
+#define P_GETALIGN 7
+
+static HRESULT STDMETHODCALLTYPE p_qi(void *me, REFIID iid, void **out)
+{
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!IsEqualGUID(iid, &iid_unk) && !IsEqualGUID(iid, &iid_insp) && !IsEqualGUID(iid, &iid_agile) &&
+        !IsEqualGUID(iid, &iid_wpf)) return E_NOINTERFACE;
+    InterlockedIncrement(&W(me)->ref);
+    *out = me;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_name(void *me, HSTRING *out)
+{
+    static const WCHAR name[] = L"Microsoft.UI.Text.RichEditTextParagraphFormat";
+    (void)me;
+    return make_hstring(name, sizeof(name) / sizeof(WCHAR) - 1, out);
+}
+
+/* Alignment: ParagraphAlignment (Undefined 0, Left 1, Center 2, Right 3,
+ * Justify 4) over TOM's (tomAlignLeft 0 .. tomAlignJustify 3) */
+static HRESULT STDMETHODCALLTYPE p_get_Alignment(void *me, INT32 *value)
+{
+    LONG v = tomUndefined;
+    HRESULT hr;
+    if (!value) return E_POINTER;
+    hr = PARA(me, P_GETALIGN, GETL)(W(me)->tom, &v);
+    *value = FAILED(hr) || v < 0 || v > 3 ? 0 : v + 1;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE p_put_Alignment(void *me, INT32 value)
+{
+    if (value < 1 || value > 4) return value ? E_INVALIDARG : S_OK;
+    return PARA(me, P_GETALIGN + 1, SETL)(W(me)->tom, value - 1);
+}
+
+/* (the properties not kept: 0 or Off, and setting them does nothing) */
+static HRESULT STDMETHODCALLTYPE p_get_long(void *me, INT32 *value) { (void)me; if (!value) return E_POINTER; *value = 0; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_get_one(void *me, INT32 *value) { (void)me; if (!value) return E_POINTER; *value = 1; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_get_rule(void *me, INT32 *value) { (void)me; if (!value) return E_POINTER; *value = 0; return S_OK; }   /* (LineSpacingRule Undefined) */
+static HRESULT STDMETHODCALLTYPE p_get_spacing(void *me, float *value) { (void)me; if (!value) return E_POINTER; *value = 1.0f; return S_OK; }  /* (single) */
+static HRESULT STDMETHODCALLTYPE p_AddTab(void *me, float position, INT32 align, INT32 leader)
+{ (void)me; (void)position; (void)align; (void)leader; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_ClearAllTabs(void *me) { (void)me; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_DeleteTab(void *me, float position) { (void)me; (void)position; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_GetTab(void *me, INT32 index, float *position, INT32 *align, INT32 *leader)
+{
+    (void)me; (void)index;
+    if (position) *position = 0;
+    if (align) *align = 0;
+    if (leader) *leader = 0;
+    return E_INVALIDARG;                            /* (no tabs) */
+}
+static HRESULT STDMETHODCALLTYPE p_SetIndents(void *me, float start, float left, float right)
+{ (void)me; (void)start; (void)left; (void)right; return S_OK; }
+static HRESULT STDMETHODCALLTYPE p_SetLineSpacing(void *me, INT32 rule, float spacing)
+{ (void)me; (void)rule; (void)spacing; return S_OK; }
+
+/* SetClone, GetClone, IsEqual: TOM's SetDuplicate, GetDuplicate, IsEqual */
+static HRESULT STDMETHODCALLTYPE p_SetClone(void *me, void *value)
+{
+    IUnknown *from = wpara_tom(value);
+    if (!from) return E_INVALIDARG;
+    return PARA(me, P_SETDUP, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *))(W(me)->tom, from);
+}
+static HRESULT STDMETHODCALLTYPE p_GetClone(void *me, void **value)
+{
+    IUnknown *dup = 0;
+    HRESULT hr;
+    if (!value) return E_POINTER;
+    *value = 0;
+    if (FAILED(hr = PARA(me, P_GETDUP, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown **))(W(me)->tom, &dup))) return hr;
+    hr = wpara_wrap(dup, value);
+    dup->lpVtbl->Release(dup);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE p_IsEqual(void *me, void *format, BYTE *result)
+{
+    IUnknown *other = wpara_tom(format);
+    LONG v = 0;
+    if (!result) return E_POINTER;
+    *result = 0;
+    if (!other) return S_OK;
+    PARA(me, P_ISEQUAL, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, IUnknown *, LONG *))(W(me)->tom, other, &v);
+    *result = v == tomTrue;
+    return S_OK;
+}
+
+static const VFN wpf_vtbl[] = {
+    (VFN)p_qi, (VFN)c_addref, (VFN)c_release, (VFN)c_iids, (VFN)p_name, (VFN)c_trust,
+    (VFN)p_get_Alignment, (VFN)p_put_Alignment,
+    (VFN)c_get_zero,                                       /* FirstLineIndent */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* KeepTogether */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* KeepWithNext */
+    (VFN)c_get_zero,                                       /* LeftIndent */
+    (VFN)p_get_spacing,                                    /* LineSpacing */
+    (VFN)p_get_rule,                                       /* LineSpacingRule */
+    (VFN)p_get_long, (VFN)c_put_none,                      /* ListAlignment */
+    (VFN)p_get_long, (VFN)c_put_none,                      /* ListLevelIndex */
+    (VFN)p_get_one, (VFN)c_put_none,                       /* ListStart */
+    (VFN)p_get_long, (VFN)c_put_none,                      /* ListStyle */
+    (VFN)c_get_zero, (VFN)c_put_float,                     /* ListTab */
+    (VFN)p_get_long, (VFN)c_put_none,                      /* ListType (None) */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* NoLineNumber */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* PageBreakBefore */
+    (VFN)c_get_zero, (VFN)c_put_float,                     /* RightIndent */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* RightToLeft */
+    (VFN)p_get_long, (VFN)c_put_none,                      /* Style */
+    (VFN)c_get_zero, (VFN)c_put_float,                     /* SpaceAfter */
+    (VFN)c_get_zero, (VFN)c_put_float,                     /* SpaceBefore */
+    (VFN)c_get_off, (VFN)c_put_none,                       /* WidowControl */
+    (VFN)p_get_long,                                       /* TabCount */
+    (VFN)p_AddTab, (VFN)p_ClearAllTabs, (VFN)p_DeleteTab, (VFN)p_GetClone, (VFN)p_GetTab,
+    (VFN)p_IsEqual, (VFN)p_SetClone, (VFN)p_SetIndents, (VFN)p_SetLineSpacing,
+};
+_Static_assert(sizeof(wpf_vtbl) / sizeof(wpf_vtbl[0]) == 6 + 48, "ITextParagraphFormat's methods");
+
+HRESULT wpara_wrap(void *tompara, void **out)
+{
+    WCF *w;
+    if (!out) return E_POINTER;
+    *out = 0;
+    if (!tompara) return E_INVALIDARG;
+    if (!(w = alloc(sizeof(WCF)))) return E_OUTOFMEMORY;
+    w->vtbl = wpf_vtbl;
+    w->ref = 1;
+    w->tom = tompara;
+    w->tom->lpVtbl->AddRef(w->tom);
+    *out = w;
+    return S_OK;
+}
+
+void *wpara_tom(void *format)
+{
+    return (format && W(format)->vtbl == wpf_vtbl) ? W(format)->tom : 0;
 }

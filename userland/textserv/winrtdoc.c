@@ -17,8 +17,8 @@
  * (Move, MoveStart, MoveEnd, Expand, StartOf, EndOf, GetIndex, SetIndex,
  * Delete), FindText, ChangeCase, Cut, Copy, Paste, CanPaste, comparisons;
  * the selection's key moves (MoveLeft/Right/Up/Down, HomeKey, EndKey) and
- * TypeText; a range's character format (winrtfmt.c).  The paragraph
- * formats, links, images, streams, points and rectangles and math answer
+ * TypeText; a range's character and paragraph formats (winrtfmt.c; the
+ * paragraph's alignment).  The default formats, links, images, streams, points and rectangles and math answer
  * E_NOTIMPL.  Written from the
  * Windows App SDK's Microsoft.UI.Text documentation.
  */
@@ -450,9 +450,22 @@ static HRESULT STDMETHODCALLTYPE wr_get_Link(void *me, HSTRING *value)
 static HRESULT STDMETHODCALLTYPE wr_put_Link(void *me, HSTRING value)
 { (void)me; (void)value; return E_NOTIMPL; }
 static HRESULT STDMETHODCALLTYPE wr_get_ParagraphFormat(void *me, void **value)
-{ (void)me; (void)value; return E_NOTIMPL; }
+{
+    void *para = 0;
+    HRESULT hr;
+    if (!value) return E_POINTER;
+    *value = 0;
+    if (FAILED(hr = TR(me)->lpVtbl->GetPara2(TR(me), &para))) return hr;
+    hr = wpara_wrap(para, value);                   /* (live, as the TOM paragraph: winrtfmt.c) */
+    ((IUnknown *)para)->lpVtbl->Release((IUnknown *)para);
+    return hr;
+}
 static HRESULT STDMETHODCALLTYPE wr_put_ParagraphFormat(void *me, void *value)
-{ (void)me; (void)value; return E_NOTIMPL; }
+{
+    void *para = wpara_tom(value);
+    if (!para) return E_INVALIDARG;
+    return TR(me)->lpVtbl->SetPara2(TR(me), para);
+}
 static HRESULT STDMETHODCALLTYPE wr_get_StartPosition(void *me, INT32 *value)
 {
     LONG v = 0;

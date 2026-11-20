@@ -17590,6 +17590,33 @@ box.  `textservtest` checks the new `EN_CHANGE` payload, the unlimited
 host and the final mark.  Next: `PasswordBox` and `RichEditBox`, and
 selection, cut and paste in a CI check.
 
+## CI: Bluetooth's stale HID reconnect, the rest of it
+
+The fix for the `bluetooth settings` flake (#632) made a stale
+`BthHidConnect` give up when its link dropped, but CI showed it could
+still act first. On #635 (run 1590), when `bttest remove` forgot the
+mouse, `hidbth` saw its channels close and called `BthHidConnect` once
+more; the link was already down, so it sent Create Connection to the
+mouse, and the device was forgotten under it. The controller completed
+that link, which no one waited for any more, so Settings' own Create
+Connection a moment later failed with 0x0B ("connection already
+exists") and the pairing was refused (`0xc000009d`).
+
+- Switching a device's HID service off, or forgetting the device, now
+  first marks its node as no longer the device's (`hid_stop()`), then
+  closes the channels: `hidbth`, which reconnects when it sees them
+  close, is refused from the start.
+- A Connection Complete that nobody waits for (no device connecting to
+  that address) is disconnected at once instead of being left open.
+- `acl_send` no longer spends one of the controller's ACL buffers on a
+  packet it does not send because the link is down.
+- `L2CAP PSM ... did not open` now logs the channel's state and the free
+  ACL buffers. The headset's `L2CAP PSM 0001 did not open` on main run
+  1589 (SDP to a freshly paired headset got no answer, so its Hands-Free
+  and Audio Sink services stayed off, error 1060) happened with no stale
+  thread running and is not explained by these logs; the new line is
+  there to pin it down if it comes back.
+
 ## Windows Calculator's launch, twenty-eighth slice: gradients
 
 The twenty-eighth part of item 3 of 0.2.2 "Pulsar" ([plan](releases/0.2.2.md)),
@@ -17635,6 +17662,59 @@ needed for them to compile.
 - **Found:** Calculator's page gets past its lists' panel and stops next
   at a `HyperlinkButton`, which NovaOS does not build yet.  That is the
   next part.  The page does not draw yet.
+
+## XAML rich text formats
+
+Fifth part of XAML text input, item 1 of 0.2.3 "Nebula"
+([plan](releases/0.2.3.md)), after the `PasswordBox`, the `RichEditBox`
+and the clipboard ([fourth part](2026-11-18-xaml-passwordbox-richeditbox.md)).
+A `RichEditBox`'s text now has character formats: bold, italic,
+underline, strikethrough and colour, per character, from the keyboard
+(Ctrl+B, Ctrl+I, Ctrl+U) and from an app's
+`Document.Selection.CharacterFormat`.
+
+- **Character formats in `WinUIEdit.dll`** (`userland/textserv/runs.c`):
+  rich text (`TXTBIT_RICHTEXT`, a `RichEditBox`'s) keeps a format for
+  each character, an index into a small table of what each format sets
+  over the default one, so a change of the default (the host's font)
+  shows through wherever a format leaves it alone.  Text put in takes
+  the format of the text it replaces or of the character before it, or
+  the caret's own when `EM_SETCHARFORMAT` set one with nothing selected,
+  as Windows' Rich Edit does; undo and redo keep formats.  Plain text (a
+  `TextBox`'s) still has one format.  `EM_SETCHARFORMAT` and
+  `EM_GETCHARFORMAT` take `SCF_SELECTION` and `SCF_ALL` (a mixed
+  selection leaves the property's `CFM_` bit clear), and the formatting
+  keys honour `EM_SETFORMATACCELERATORS`, which a `RichEditBox`'s
+  `DisabledFormattingAccelerators` sends.
+- **Drawn in runs.**  Each run of one format is measured and drawn in its
+  own font (GDI's bold and italic fonts, or the host's DirectWrite faces
+  in that weight and style through `IProvideFontInfo`) and colour;
+  underline and strikethrough are bars under and through the run.
+- **The Text Object Model's font** (`tomfmt.c`): a range's `ITextFont` is
+  live, as on Windows: `GetBold`, `GetItalic`, `GetUnderline`,
+  `GetStrikeThrough`, `GetForeColor` and `GetWeight` read the range's
+  characters now (`tomUndefined` where they differ) and the setters
+  format them; `GetDuplicate` gives a font of its own, which
+  `SetDuplicate` or the range's `SetFont` applies.  Name and size are
+  the default's.
+- **`Microsoft.UI.Text.ITextCharacterFormat`** (`winrtfmt.c`): a
+  Windows Runtime range's `CharacterFormat` is that TOM font with
+  `FormatEffect`, `UnderlineType` and `Windows.UI.Color` values;
+  `GetClone`, `SetClone` and `IsEqual` too.  The effects NovaOS does not
+  draw (all caps, hidden, outline, small caps, subscript, superscript)
+  read Off.
+
+`textservtest` checks the formats on a rich text: set and read back by
+selection, a mixed selection, bold drawn heavier and a red run found in
+the pixels, underline and strikethrough, typing after a bold word and at
+a caret given italic, Ctrl+B twice, Ctrl+U, a key turned off, undo, the
+live TOM font, its duplicate applied with `SetFont`, and
+`ITextCharacterFormat`'s `Bold`, `ForegroundColor` and `Underline`;
+64- and 32-bit.  `xamlpagetest` presses Ctrl+B in its `RichEditBox` and
+reads `Document.Selection.CharacterFormat.Bold` back as On.  Left for the
+next part: font sizes and faces per run (lines of different heights),
+paragraph formats, RTF, links, the text boxes' context menus (WinUI's
+text command bar flyouts) and the touch keyboard's input scope.
 
 <!-- END generated:history -->
 

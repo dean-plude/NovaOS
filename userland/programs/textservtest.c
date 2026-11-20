@@ -940,6 +940,174 @@ static void winrt(void)
     msg(WM_SETTEXT, 0, (LPARAM)L"");
 }
 
+/* ---- rich text's character formats (a RichEditBox's) ------------------- */
+static int count_red(void)
+{
+    int i, n = 0;
+    for (i = 0; i < BW * BH; i++) {
+        DWORD p = bits_of[i];
+        n += ((p >> 16) & 0xff) > 150 && ((p >> 8) & 0xff) < 100 && (p & 0xff) < 100;
+    }
+    return n;
+}
+static DWORD sel_effects(LONG a, LONG b, DWORD *mask, COLORREF *color)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cf.cbSize = sizeof(cf);
+    set_sel(a, b);
+    msg(EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    if (mask) *mask = cf.cf.dwMask;
+    if (color) *color = cf.cf.crTextColor;
+    return cf.cf.dwEffects;
+}
+static LRESULT set_format(LONG a, LONG b, DWORD mask, DWORD effects, COLORREF color)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cf.cbSize = sizeof(cf);
+    cf.cf.dwMask = mask;
+    cf.cf.dwEffects = effects;
+    cf.cf.crTextColor = color;
+    set_sel(a, b);
+    return msg(EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+#define FSLOT(p, i, type) SLOT(p, 7 + (i), type)  /* (ITextFont's methods after IDispatch's) */
+static void formatting(HDC dc)
+{
+    static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+    static const IID iid_wdoc = {0x1149d57d, 0x86a6, 0x59dd, {0x88, 0xd9, 0x19, 0x6f, 0x27, 0xbc, 0x5c, 0x85}};
+    ITextDocument2 *d = 0;
+    ITextRange2 *r = 0;
+    IUnknown *font = 0, *dup = 0, *doc = 0, *wr = 0, *wcf = 0;
+    DWORD mask = 0, e;
+    COLORREF c = 0;
+    LONG v = 0;
+    INT32 fx = -1;
+    int dark, under;
+    struct { BYTE A, R, G, B; } col;
+
+    host.bits |= TXTBIT_RICHTEXT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"plain bold red");
+    set_sel(0, 0);
+    draw(dc);
+    dark = count_dark();
+    check("rich text: no red before a colour is set", count_red() == 0);
+    check("EM_SETCHARFORMAT(SCF_SELECTION) bold on \"bold\"", set_format(6, 10, CFM_BOLD, CFE_BOLD, 0) != 0);
+    e = sel_effects(6, 10, &mask, 0);
+    check("EM_GETCHARFORMAT(SCF_SELECTION): \"bold\" is bold", (mask & CFM_BOLD) && (e & CFE_BOLD));
+    e = sel_effects(0, 5, &mask, 0);
+    check("... and \"plain\" is not", (mask & CFM_BOLD) && !(e & CFE_BOLD));
+    sel_effects(0, 10, &mask, 0);
+    check("... a selection over both: bold undefined (CFM_BOLD clear)", !(mask & CFM_BOLD) && (mask & CFM_ITALIC));
+    set_sel(0, 0);
+    draw(dc);
+    check("bold text is drawn heavier", count_dark() > dark);
+    set_format(11, 14, CFM_COLOR, 0, RGB(255, 0, 0));
+    set_sel(0, 0);
+    draw(dc);
+    check("a run's colour: \"red\" is drawn red", count_red() > 10);
+    e = sel_effects(11, 14, &mask, &c);
+    check("... and EM_GETCHARFORMAT gives it", (mask & CFM_COLOR) && !(e & CFE_AUTOCOLOR) && c == RGB(255, 0, 0));
+    dark = count_dark();
+    set_format(0, 5, CFM_UNDERLINE, CFE_UNDERLINE, 0);
+    set_sel(0, 0);
+    draw(dc);
+    under = count_dark();
+    check("an underline is drawn under \"plain\"", under > dark);
+    set_format(0, 5, CFM_UNDERLINE | CFM_STRIKEOUT, CFE_STRIKEOUT, 0);
+    set_sel(0, 0);
+    draw(dc);
+    check("strikethrough in place of the underline", (sel_effects(0, 5, 0, 0) & (CFE_UNDERLINE | CFE_STRIKEOUT)) == CFE_STRIKEOUT);
+    /* typing takes the format of the character before it, or the caret's */
+    set_sel(10, 10);
+    type(L"X");
+    check("typed after \"bold\": bold", text_is(L"plain boldX red") && (sel_effects(10, 11, 0, 0) & CFE_BOLD));
+    set_format(0, 0, CFM_ITALIC, CFE_ITALIC, 0);
+    type(L"I");
+    check("the caret's format (EM_SETCHARFORMAT, no selection): the typed character is italic",
+          text_is(L"Iplain boldX red") && (sel_effects(0, 1, 0, 0) & CFE_ITALIC) && !(sel_effects(1, 2, 0, 0) & CFE_ITALIC));
+    /* the formatting keys */
+    set_sel(1, 6);
+    ctrl_key('B');
+    check("Ctrl+B: bold", (sel_effects(1, 6, &mask, 0) & CFE_BOLD) && (mask & CFM_BOLD));
+    set_sel(1, 6);
+    ctrl_key('B');
+    check("Ctrl+B again: not bold", !(sel_effects(1, 6, 0, 0) & CFE_BOLD));
+    set_sel(1, 6);
+    ctrl_key('U');
+    check("Ctrl+U: underline", sel_effects(1, 6, 0, 0) & CFE_UNDERLINE);
+    msg(NOVA_EM_SETFORMATACCELERATORS, 0, CFE_ITALIC | CFE_UNDERLINE);   /* (DisabledFormattingAccelerators.Bold) */
+    set_sel(1, 6);
+    ctrl_key('B');
+    check("a formatting key turned off does nothing", !(sel_effects(1, 6, 0, 0) & CFE_BOLD));
+    msg(NOVA_EM_SETFORMATACCELERATORS, 0, CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE);
+    ctrl_key('Z');
+    check("Ctrl+Z undoes a format change", !(sel_effects(1, 6, 0, 0) & CFE_UNDERLINE) && text_is(L"Iplain boldX red"));
+    /* the Text Object Model's font: live over its range */
+    ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+    if (d) d->lpVtbl->Range2(d, 7, 11, &r);       /* "bold" */
+    if (r) r->lpVtbl->GetFont(r, (void **)&font);
+    check("ITextRange.GetFont", font != 0);
+    if (font) {
+        FSLOT(font, 13, HRESULT (STDMETHODCALLTYPE *)(void *, LONG *))(font, &v);          /* GetBold */
+        check("ITextFont.GetBold: tomTrue", v == tomTrue);
+        r->lpVtbl->SetStart(r, 0);
+        FSLOT(font, 13, HRESULT (STDMETHODCALLTYPE *)(void *, LONG *))(font, &v);
+        check("... live: the range moved over plain text too, tomUndefined", v == tomUndefined);
+        FSLOT(font, 24, HRESULT (STDMETHODCALLTYPE *)(void *, LONG))(font, tomTrue);       /* SetItalic */
+        check("ITextFont.SetItalic formats the range", (sel_effects(0, 11, &mask, 0) & CFE_ITALIC) && (mask & CFM_ITALIC));
+        FSLOT(font, 0, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(font, (void **)&dup);   /* GetDuplicate */
+        if (dup) {
+            ITextRange2 *r2 = 0;
+            FSLOT(dup, 18, HRESULT (STDMETHODCALLTYPE *)(void *, LONG))(dup, RGB(0, 0, 255));  /* SetForeColor */
+            sel_effects(0, 11, 0, &c);
+            check("a duplicate font is its own: the range keeps its colour", c != RGB(0, 0, 255));
+            d->lpVtbl->Range2(d, 13, 16, &r2);
+            if (r2) {
+                r2->lpVtbl->SetFont(r2, dup);
+                e = sel_effects(13, 16, &mask, &c);
+                check("ITextRange.SetFont applies a duplicate's values", (e & CFE_ITALIC) && c == RGB(0, 0, 255));
+                r2->lpVtbl->Release(r2);
+            }
+            dup->lpVtbl->Release(dup);
+        } else check("ITextFont.GetDuplicate", 0);
+        font->lpVtbl->Release(font);
+    }
+    if (r) r->lpVtbl->Release(r);
+    if (d) d->lpVtbl->Release(d);
+    /* the Windows Runtime's: a RichEditBox's Document.GetRange(..).CharacterFormat */
+    ts->lpVtbl->QueryInterface(ts, &iid_wdoc, (void **)&doc);
+    if (doc) WSLOT(doc, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, void **))(doc, 1, 6, (void **)&wr);
+    if (wr) WSLOT(wr, 2, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(wr, (void **)&wcf);   /* get_CharacterFormat */
+    check("ITextRange.CharacterFormat", wcf != 0);
+    if (wcf) {
+        WSLOT(wcf, 5, HRESULT (STDMETHODCALLTYPE *)(void *, INT32))(wcf, 1);                    /* put_Bold(On) */
+        WSLOT(wcf, 4, HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))(wcf, &fx);                /* get_Bold */
+        check("ITextCharacterFormat.Bold = On formats the range", fx == 1 && (sel_effects(1, 6, 0, 0) & CFE_BOLD));
+        col.A = 255; col.R = 0; col.G = 128; col.B = 0;
+        WSLOT(wcf, 11, HRESULT (STDMETHODCALLTYPE *)(void *, typeof(col)))(wcf, col);         /* put_ForegroundColor */
+        memset(&col, 0, sizeof(col));
+        WSLOT(wcf, 10, HRESULT (STDMETHODCALLTYPE *)(void *, typeof(col) *))(wcf, &col);       /* get_ForegroundColor */
+        sel_effects(1, 6, 0, &c);
+        check("ITextCharacterFormat.ForegroundColor", col.A == 255 && col.G == 128 && c == RGB(0, 128, 0));
+        WSLOT(wcf, 43, HRESULT (STDMETHODCALLTYPE *)(void *, INT32 *))(wcf, &fx);               /* get_Underline */
+        check("ITextCharacterFormat.Underline: None", fx == 1);
+        wcf->lpVtbl->Release(wcf);
+    }
+    if (wr) wr->lpVtbl->Release(wr);
+    if (doc) doc->lpVtbl->Release(doc);
+    /* plain text has one format: the selection's change is the default's */
+    host.bits &= ~TXTBIT_RICHTEXT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"plain");
+    set_format(0, 2, CFM_BOLD, CFE_BOLD, 0);
+    check("plain text: a selection's format is the whole text's", sel_effects(3, 5, 0, 0) & CFE_BOLD);
+    set_format(0, 5, CFM_BOLD, 0, 0);
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -981,6 +1149,7 @@ int main(void)
     tom(m);
     requests();
     winrt();
+    formatting(dc);
     drawd2d(dc);
     others();
 

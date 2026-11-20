@@ -118,7 +118,7 @@ static ctl::ComPtr<xaml_controls::IPasswordBox> s_password;
 static ctl::ComPtr<xaml_controls::IRichEditBox> s_rich;
 static int s_password_changed, s_rich_changed;  /* their PasswordChanged and TextChanged counts */
 static int s_pasted, s_copied, s_cut;           /* the TextBox's Paste, CopyingToClipboard, CuttingToClipboard */
-#define LAST_STEP 20
+#define LAST_STEP 21
 static int s_shown;     /* ticks since the checks, while the page stays on screen */
 static int s_step;      /* the input steps, one per tick */
 static int s_pixel_ticks;       /* ticks waited for the first frame's pixels */
@@ -456,7 +456,25 @@ static void input_step(HWND top, HWND island)
         printf("xamlpagetest: RichEditBox TextChanged %d times\n", s_rich_changed);
         CHECK("its TextChanged fires", s_rich_changed >= 1);
         CHECK("the RichEditBox draws its text", text_pixels(top, island, 24, 308, 120) >= 20);
+        /* (XAML text input, part 5: rich text's formats) Ctrl+B bolds the
+         * selection, which its Document's selection reads back */
+        post_key(island, 'B', true);
         break;
+    case 20: {
+        ctl::ComPtr<mut::ITextDocument> doc;
+        ctl::ComPtr<mut::ITextSelection> sel;
+        ctl::ComPtr<mut::ITextRange> range;
+        ctl::ComPtr<mut::ITextCharacterFormat> format;
+        mut::FormatEffect bold = mut::FormatEffect_Undefined;
+        if (s_rich) s_rich->get_Document(&doc);
+        if (doc) doc->get_Selection(&sel);
+        if (sel) sel.As(&range);
+        CHECK_HR("Document.Selection.CharacterFormat", range ? range->get_CharacterFormat(&format) : E_FAIL);
+        if (format) format->get_Bold(&bold);
+        printf("xamlpagetest: RichEditBox selection Bold %d\n", static_cast<int>(bold));
+        CHECK("Ctrl+B in the RichEditBox bolds the selection", bold == mut::FormatEffect_On);
+        break;
+    }
     }
 }
 

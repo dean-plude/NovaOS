@@ -17,8 +17,9 @@
  * (Move, MoveStart, MoveEnd, Expand, StartOf, EndOf, GetIndex, SetIndex,
  * Delete), FindText, ChangeCase, Cut, Copy, Paste, CanPaste, comparisons;
  * the selection's key moves (MoveLeft/Right/Up/Down, HomeKey, EndKey) and
- * TypeText.  The character and paragraph formats, links, images, streams,
- * points and rectangles and math answer E_NOTIMPL.  Written from the
+ * TypeText; a range's character format (winrtfmt.c).  The paragraph
+ * formats, links, images, streams, points and rectangles and math answer
+ * E_NOTIMPL.  Written from the
  * Windows App SDK's Microsoft.UI.Text documentation.
  */
 #include "tsint.h"
@@ -53,7 +54,7 @@ static BOOL strings(void)
     return p_create && p_buffer;
 }
 
-static HRESULT make_hstring(const WCHAR *s, UINT32 n, HSTRING *out)
+HRESULT make_hstring(const WCHAR *s, UINT32 n, HSTRING *out)
 {
     if (!out) return E_INVALIDARG;
     *out = 0;
@@ -388,9 +389,22 @@ static HRESULT STDMETHODCALLTYPE wr_put_Character(void *me, WCHAR value)
     return TR(me)->lpVtbl->SetChar(TR(me), value);
 }
 static HRESULT STDMETHODCALLTYPE wr_get_CharacterFormat(void *me, void **value)
-{ (void)me; (void)value; return E_NOTIMPL; }
+{
+    void *font = 0;
+    HRESULT hr;
+    if (!value) return E_POINTER;
+    *value = 0;
+    if (FAILED(hr = TR(me)->lpVtbl->GetFont2(TR(me), &font))) return hr;
+    hr = wfmt_wrap(font, value);                    /* (live, as the TOM font: winrtfmt.c) */
+    ((IUnknown *)font)->lpVtbl->Release((IUnknown *)font);
+    return hr;
+}
 static HRESULT STDMETHODCALLTYPE wr_put_CharacterFormat(void *me, void *value)
-{ (void)me; (void)value; return E_NOTIMPL; }
+{
+    void *font = wfmt_tom(value);
+    if (!font) return E_INVALIDARG;
+    return TR(me)->lpVtbl->SetFont2(TR(me), font);
+}
 static HRESULT STDMETHODCALLTYPE wr_get_FormattedText(void *me, void **value)
 {
     return wr_GetClone(me, value);

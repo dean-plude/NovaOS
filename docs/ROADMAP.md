@@ -1272,7 +1272,9 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `PasswordBox` and a `RichEditBox` take typing too, and the text boxes
   select all, copy, cut and paste with the keyboard through the clipboard
   (with their `Paste`, `CopyingToClipboard` and `CuttingToClipboard`
-  events).
+  events).  Since 11-19 a `RichEditBox`'s text has character formats
+  (bold, italic, underline, strikethrough, colour) from Ctrl+B, I and U
+  and from its `Document`'s `CharacterFormat`.
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

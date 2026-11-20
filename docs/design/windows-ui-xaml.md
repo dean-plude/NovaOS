@@ -850,7 +850,16 @@ vendors.
      `EN_CUTREQUESTED`, `EN_COPYREQUESTED` and `EN_PASTEREQUESTED`; that
      is where a text box raises its `CuttingToClipboard`,
      `CopyingToClipboard` and `Paste` events (an app that handles one
-     stops the Rich Edit's own).
+     stops the Rich Edit's own).  Rich text's character formats
+     (part 5) live in `WinUIEdit.dll` too: `userland/textserv/runs.c`
+     keeps a format per character of a `RichEditBox`'s text (bold,
+     italic, underline, strikethrough and colour over the default the
+     host gives), draws each run in its own DirectWrite face and colour,
+     and answers `EM_SETCHARFORMAT`/`EM_GETCHARFORMAT` by selection and
+     Ctrl+B, I and U (as `EM_SETFORMATACCELERATORS` allows); a TOM
+     range's `ITextFont` is live over its characters (`tomfmt.c`), and
+     the Windows Runtime range's `CharacterFormat` is that font as
+     `Microsoft.UI.Text.ITextCharacterFormat` (`winrtfmt.c`).
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

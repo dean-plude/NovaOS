@@ -51,7 +51,8 @@
  * process's package and its Id), and UserActivityRequestManager (the
  * view's; its UserActivityRequested event is never raised: no Timeline).
  * Windows.Foundation.Diagnostics' LoggingChannel, LoggingChannelOptions,
- * LoggingOptions, LoggingFields and LoggingActivity are in logging.c.
+ * LoggingOptions, LoggingFields and LoggingActivity are in logging.c,
+ * Windows.UI.Popups' PopupMenu and UICommand in popups.c.
  */
 #include <windows.h>
 #include <roapi.h>
@@ -2692,6 +2693,7 @@ static PackageStatics g_package = { (const void *const *)pk_factory_vt, (const v
                                     (const void *const *)pk_package_vt, (const void *const *)pk_id_vt };
 
 HRESULT logging_factory(HSTRING cls, void **factory);
+HRESULT popups_factory(HSTRING cls, void **factory);
 APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
 {
     if (!factory) return E_POINTER;
@@ -2710,6 +2712,7 @@ APPCORE_API HRESULT WINAPI DllGetActivationFactory(HSTRING cls, void **factory)
     if (name_is(cls, L"Windows.UI.ViewManagement.ApplicationView")) { *factory = &g_appview_statics.factory; return S_OK; }
     if (name_is(cls, L"Windows.ApplicationModel.Package")) { *factory = &g_package.factory; return S_OK; }
     *factory = 0;
-    return logging_factory(cls, factory);           /* Windows.Foundation.Diagnostics' Logging* (logging.c) */
+    if (SUCCEEDED(logging_factory(cls, factory))) return S_OK;  /* Windows.Foundation.Diagnostics' Logging* (logging.c) */
+    return popups_factory(cls, factory);            /* Windows.UI.Popups' PopupMenu and UICommand (popups.c) */
 }
 APPCORE_API HRESULT WINAPI DllCanUnloadNow(void) { return S_FALSE; }

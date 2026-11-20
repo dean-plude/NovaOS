@@ -1822,8 +1822,9 @@ CORE_SOURCES['components/brushes/lib/Microsoft.UI.Xaml.Brushes.vcxproj'] += ('..
 # its private settings and helpers, with the Rich Edit OLE callback and the
 # text controls' entry points the framework calls (TextControlsPinvokes);
 # with the PasswordBox and the RichEditBox (part 4); less their automation
-# peers, the context menu and the linguistics (spelling) helper, which join
-# later.  Of the framework, the TextBox, the PasswordBox and the
+# peers, the text command bar flyout and the linguistics (spelling)
+# helper, which join later; and the context menu a text box shows
+# without a ContextFlyout (part 6).  Of the framework, the TextBox, the PasswordBox and the
 # RichEditBox, the text box base and its view, with the placeholder
 # text helper and the arguments of the text box's events, each its
 # generated class and its partial one)
@@ -1833,7 +1834,13 @@ CORE_LIBRARIES.append((_TEXT_CONTROLS, 'core/common.props', 'core/native/text/Co
 CORE_SOURCES[_TEXT_CONTROLS] = tuple('%s.cpp' % x for x in (
     'TextBoxBase', 'TextBox', 'TextBoxView', 'TextServicesHost', 'HWRenderTarget', 'HWSolidColorBrush', 'HWStrokeStyle',
     'HwTextBitmap', 'Util', 'TextBoxUIManagerEventSink', 'PrivateTextInputSettings', 'TextBoxCommandHandler',
-    'TextControlsPinvokes', 'RichEditOleCallback', 'PasswordBox', 'RichEditBox'))
+    'TextControlsPinvokes', 'RichEditOleCallback', 'PasswordBox', 'RichEditBox',
+    # (part 6: the context menu a text box without a ContextFlyout shows,
+    # Windows.UI.Popups' PopupMenu, with its commands' handlers, and the
+    # text blocks' handlers, which the same menu takes)
+    'TextContextMenu', 'TextContextMenuCommandHandler', 'TextBlockCommandHandler', 'RichTextBlockCommandHandler'))
+# (whose handlers compare an IID by the name MIDL's header gives it)
+FILE_FIRST['TextContextMenuCommandHandler.cpp'] = ('nova_popups_iids.h',)
 # (and the text core's helpers for them: the caret's blink and its storyboard)
 CORE_SOURCES[_CORETEXT] += ('TextBox/TextBoxHelpers.cpp', 'common/TextSelectionSettings.cpp')
 CORE_FIRST[_TEXT_CONTROLS] = CORE_FIRST['core/native/text/Common/Native.Text.Common.vcxproj'] + [
@@ -1852,6 +1859,10 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += tuple('.
     'TextBox_Partial', 'TextBoxView_Partial', 'TextBoxPlaceholderTextHelper', 'TextControlFlyoutHelper',
     'PasswordBox_Partial', 'RichEditBox_Partial')) + tuple(
     '../winrtgeneratedclasses/%s.g.cpp' % x for x in _TEXT_BOX)
+# (part 6: the arguments of the ContextRequested event a right click raises
+# before the text box's RightTapped asks for its context menu)
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../ContextRequestedEventArgs_Partial.cpp', '../winrtgeneratedclasses/ContextRequestedEventArgs.g.cpp')
 # (step 32.6, a page's images: the core's image element, CImage
 # (native/elements/image.cpp), the core's image provider, which hands an
 # image source its decoded surface (core/imaging/ImagingProvider, less the

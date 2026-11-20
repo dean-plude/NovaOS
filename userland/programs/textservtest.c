@@ -856,6 +856,84 @@ static void requests(void)
     check("WM_PASTE is not a request", host.requests[0] == p0 + 4);
 }
 
+/* ---- the context menu: the host's OLE callback asked for it ------------- */
+typedef struct { IRichEditOleCallback_ cb; LONG ref; int asked; WORD seltype; NOVA_GETCONTEXTMENUEX ex; } MENUCB;
+static HRESULT STDMETHODCALLTYPE mcb_qi(IRichEditOleCallback_ *me, REFIID iid, void **out)
+{
+    static const IID iid_cb = NOVA_IID_IRichEditOleCallback;
+    if (!memcmp(iid, &iid_unknown, sizeof(IID)) || !memcmp(iid, &iid_cb, sizeof(IID))) {
+        *out = me;
+        me->lpVtbl->AddRef(me);
+        return S_OK;
+    }
+    *out = 0;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE mcb_addref(IRichEditOleCallback_ *me) { return (ULONG)++((MENUCB *)me)->ref; }
+static ULONG STDMETHODCALLTYPE mcb_release(IRichEditOleCallback_ *me) { return (ULONG)--((MENUCB *)me)->ref; }
+static HRESULT STDMETHODCALLTYPE mcb_menu(IRichEditOleCallback_ *me, WORD seltype, void *obj, CHARRANGE *chrg, HMENU *menu)
+{
+    MENUCB *m = (MENUCB *)me;
+    (void)obj;
+    m->asked++;
+    m->seltype = seltype;
+    if (seltype & GCM_MOUSEMENU) m->ex = *(NOVA_GETCONTEXTMENUEX *)chrg;
+    else { memset(&m->ex, 0, sizeof m->ex); m->ex.chrg = *chrg; }
+    *menu = 0;
+    return S_OK;
+}
+/* (the text services ask only for the menu: the other slots are left empty) */
+static const IRichEditOleCallback_Vtbl mcb_vtbl = {
+    .QueryInterface = mcb_qi, .AddRef = mcb_addref, .Release = mcb_release, .GetContextMenu = mcb_menu };
+
+static void context_menu(void)
+{
+    static MENUCB m = { { &mcb_vtbl }, 1 };
+    NOVA_RE_MOUSEINPUT in;
+    msg(WM_SETTEXT, 0, (LPARAM)L"one two");
+    check("EM_SETOLECALLBACK", msg(EM_SETOLECALLBACK, 0, (LPARAM)&m.cb) == TRUE && m.ref == 2);
+    /* (XAML's text boxes: the button's press, then its release, which
+     * asks for the menu) */
+    memset(&in, 0, sizeof in);
+    in.msg = WM_RBUTTONDOWN;
+    in.pt.x = 3;
+    in.pt.y = 5;
+    msg(NOVA_EM_MOUSEINPUT, 0, (LPARAM)&in);
+    check("the right button's press moves the caret there", get_sel().cpMin == get_sel().cpMax);
+    check("the press asks nothing", m.asked == 0);
+    in.msg = WM_RBUTTONUP;
+    check("its release asks the callback for the menu", msg_hr(NOVA_EM_MOUSEINPUT, 0, (LPARAM)&in) == S_OK && m.asked == 1);
+    check("for the mouse, at its point, nothing selected", (m.seltype & GCM_MOUSEMENU) && (m.seltype & 0xFF) == SEL_EMPTY &&
+          m.ex.pt.x == 3 && m.ex.pt.y == 5 && m.ex.chrg.cpMin == m.ex.chrg.cpMax);
+    set_sel(4, 7);
+    check("the menu key's release asks for it", msg_hr(WM_KEYUP, VK_APPS, 1) == S_OK && m.asked == 2);
+    check("for the keyboard, with the selection", !(m.seltype & GCM_MOUSEMENU) && (m.seltype & 0xFF) == SEL_TEXT &&
+          m.ex.chrg.cpMin == 4 && m.ex.chrg.cpMax == 7);
+    check("another key's release is not handled", msg_hr(WM_KEYUP, 'A', 1) == S_FALSE && m.asked == 2);
+    /* (a text box with a ContextFlyout turns Rich Edit's menu off) */
+    msg(EM_SETTOUCHOPTIONS, RTO_DISABLECONTEXTMENU, TRUE);
+    check("EM_SETTOUCHOPTIONS RTO_DISABLECONTEXTMENU", msg(EM_GETTOUCHOPTIONS, RTO_DISABLECONTEXTMENU, 0) == TRUE);
+    check("then the menu key asks nothing", msg_hr(WM_KEYUP, VK_APPS, 1) == S_FALSE && m.asked == 2);
+    msg(EM_SETTOUCHOPTIONS, RTO_DISABLECONTEXTMENU, FALSE);
+    /* (what XAML's callback asks the document for its menu's items) */
+    {
+        static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+        ITextDocument2 *d = 0;
+        LONG copy = 0, undo = 0, redo = 1;
+        ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+        if (d) {
+            d->lpVtbl->GetProperty(d, 137, &copy);      /* tomCanCopy */
+            d->lpVtbl->GetProperty(d, 139, &undo);      /* tomCanUndo */
+            d->lpVtbl->GetProperty(d, 138, &redo);      /* tomCanRedo */
+            d->lpVtbl->Release(d);
+        }
+        check("the document's tomCanCopy, tomCanUndo and tomCanRedo", copy == -1 && redo == 0 && (undo == -1 || undo == 0));
+    }
+    msg(EM_SETOLECALLBACK, 0, 0);
+    check("EM_SETOLECALLBACK NULL lets the callback go", m.ref == 1);
+    check("and nothing is asked", msg_hr(WM_KEYUP, VK_APPS, 1) == S_FALSE && m.asked == 2);
+}
+
 /* ---- the Windows Runtime document (a XAML RichEditBox's Document) -------- */
 static HRESULT (WINAPI *p_hcreate)(const WCHAR *, UINT32, HSTRING *);
 static const WCHAR *(WINAPI *p_hbuffer)(HSTRING, UINT32 *);
@@ -1148,6 +1226,7 @@ int main(void)
     password(dc);
     tom(m);
     requests();
+    context_menu();
     winrt();
     formatting(dc);
     drawd2d(dc);

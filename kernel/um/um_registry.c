@@ -933,6 +933,8 @@ static void defaults(void)
         { "Windows.Foundation.Diagnostics.LoggingOptions", "twinapi.appcore.dll" },
         { "Windows.Foundation.Diagnostics.LoggingFields", "twinapi.appcore.dll" },
         { "Windows.Foundation.Diagnostics.LoggingActivity", "twinapi.appcore.dll" },
+        { "Windows.UI.Popups.PopupMenu", "twinapi.appcore.dll" },
+        { "Windows.UI.Popups.UICommand", "twinapi.appcore.dll" },
         { "Windows.Storage.ApplicationData", "Windows.Storage.ApplicationData.dll" },
         { "Windows.Globalization.ApplicationLanguages", "Windows.Globalization.dll" },
         { "Windows.Globalization.Language", "Windows.Globalization.dll" },

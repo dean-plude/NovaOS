@@ -598,6 +598,38 @@ struct IRichEditOle_ { const IRichEditOle_Vtbl *lpVtbl; };
  * userland/windows_ui_xaml/inc/fontinfo.h) */
 #define NOVA_IID_IProvideFontInfo {0xd81d4036, 0xc20c, 0x4297, {0x8c, 0xf1, 0x58, 0x35, 0xa6, 0x76, 0x61, 0x89}}
 #define NOVA_IID_IRichEditOleCallback {0x00020d03, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+/* IRichEditOleCallback, the host's callback EM_SETOLECALLBACK gives: the
+ * text services ask it for a context menu (GetContextMenu, the slot after
+ * GetDragDropEffect) when the right button is let go or the menu key is;
+ * XAML's text boxes show theirs from it */
+typedef struct IRichEditOleCallback_ IRichEditOleCallback_;
+typedef struct {
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IRichEditOleCallback_ *, REFIID, void **);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IRichEditOleCallback_ *);
+    ULONG (STDMETHODCALLTYPE *Release)(IRichEditOleCallback_ *);
+    HRESULT (STDMETHODCALLTYPE *GetNewStorage)(IRichEditOleCallback_ *, void **);
+    HRESULT (STDMETHODCALLTYPE *GetInPlaceContext)(IRichEditOleCallback_ *, void **, void **, void *);
+    HRESULT (STDMETHODCALLTYPE *ShowContainerUI)(IRichEditOleCallback_ *, BOOL);
+    HRESULT (STDMETHODCALLTYPE *QueryInsertObject)(IRichEditOleCallback_ *, CLSID *, void *, LONG);
+    HRESULT (STDMETHODCALLTYPE *DeleteObject)(IRichEditOleCallback_ *, void *);
+    HRESULT (STDMETHODCALLTYPE *QueryAcceptData)(IRichEditOleCallback_ *, void *, UINT *, DWORD, BOOL, HGLOBAL);
+    HRESULT (STDMETHODCALLTYPE *ContextSensitiveHelp)(IRichEditOleCallback_ *, BOOL);
+    HRESULT (STDMETHODCALLTYPE *GetClipboardData)(IRichEditOleCallback_ *, CHARRANGE *, DWORD, void **);
+    HRESULT (STDMETHODCALLTYPE *GetDragDropEffect)(IRichEditOleCallback_ *, BOOL, DWORD, DWORD *);
+    HRESULT (STDMETHODCALLTYPE *GetContextMenu)(IRichEditOleCallback_ *, WORD seltype, void *oleobj, CHARRANGE *chrg,
+                                                HMENU *menu);
+} IRichEditOleCallback_Vtbl;
+struct IRichEditOleCallback_ { const IRichEditOleCallback_Vtbl *lpVtbl; };
+/* what GetContextMenu's @chrg is when @seltype has GCM_MOUSEMENU or
+ * GCM_TOUCHMENU (Rich Edit 8's GETCONTEXTMENUEX): the point is the
+ * pointer's, in the view's coordinates */
+typedef struct { CHARRANGE chrg; DWORD dwFlags; POINT pt; void *pvReserved; void *pSpellingSuggestions;
+                 WCHAR *bstrAutoCorrectedWord; } NOVA_GETCONTEXTMENUEX;
+#define GCM_TOUCHMENU       0x4000
+#define GCM_MOUSEMENU       0x2000
+#define EM_SETTOUCHOPTIONS  (WM_USER + 311)
+#define EM_GETTOUCHOPTIONS  (WM_USER + 312)
+#define RTO_DISABLECONTEXTMENU 8                  /* (NovaOS's value, as WinUIEdit.h's) */
 
 typedef HRESULT (WINAPI *PCREATETEXTSERVICES)(IUnknown *outer, ITextHost *host, IUnknown **out);
 typedef HRESULT (WINAPI *PSHUTDOWNTEXTSERVICES)(IUnknown *services);

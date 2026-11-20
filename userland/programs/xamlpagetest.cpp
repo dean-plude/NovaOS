@@ -118,7 +118,14 @@ static ctl::ComPtr<xaml_controls::IPasswordBox> s_password;
 static ctl::ComPtr<xaml_controls::IRichEditBox> s_rich;
 static int s_password_changed, s_rich_changed;  /* their PasswordChanged and TextChanged counts */
 static int s_pasted, s_copied, s_cut;           /* the TextBox's Paste, CopyingToClipboard, CuttingToClipboard */
-#define LAST_STEP 21
+#define LAST_STEP 26
+/* (XAML text input, part 6: the text boxes' context menu) the watcher
+ * thread's answer: 1 once a context menu opened (the "#32768" popup menu
+ * window of the island's thread, which it then sent @s_menu_keys), -1 if
+ * none did in ten seconds */
+static volatile LONG s_menu_seen;
+static UINT s_menu_keys[2];
+static int s_menu_waits;
 static int s_shown;     /* ticks since the checks, while the page stays on screen */
 static int s_step;      /* the input steps, one per tick */
 static int s_pixel_ticks;       /* ticks waited for the first frame's pixels */
@@ -265,6 +272,46 @@ static COLORREF border_pixel(HWND top, HWND island)
     COLORREF c = dc ? GetPixel(dc, at.x, at.y) : CLR_INVALID;
     if (dc) ReleaseDC(island, dc);
     return c;
+}
+
+/* the watcher: waits for the island's thread's context menu (a popup menu
+ * window, as Windows.UI.Popups' PopupMenu shows it) and presses its keys
+ * there: the menu's loop takes the thread's keyboard messages */
+static DWORD WINAPI watch_menu(void *thread)
+{
+    for (int i = 0; i < 200; i++) {
+        HWND menu = nullptr;
+        EnumThreadWindows(static_cast<DWORD>(reinterpret_cast<UINT_PTR>(thread)), [](HWND h, LPARAM p) -> BOOL {
+            wchar_t cls[16];
+            if (IsWindowVisible(h) && GetClassNameW(h, cls, 16) && !wcscmp(cls, L"#32768")) {
+                *reinterpret_cast<HWND *>(p) = h;
+                return FALSE;
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&menu));
+        if (menu) {
+            for (UINT vk : s_menu_keys) {
+                if (!vk) continue;
+                PostMessageW(menu, WM_KEYDOWN, vk, MAKELPARAM(1, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)));
+                PostMessageW(menu, WM_KEYUP, vk, MAKELPARAM(1, MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)) | 0xC0000000);
+            }
+            InterlockedExchange(&s_menu_seen, 1);
+            return 0;
+        }
+        Sleep(50);
+    }
+    InterlockedExchange(&s_menu_seen, -1);
+    return 0;
+}
+
+static void start_watch(UINT key1, UINT key2)
+{
+    s_menu_seen = 0;
+    s_menu_waits = 0;
+    s_menu_keys[0] = key1;
+    s_menu_keys[1] = key2;
+    HANDLE t = CreateThread(nullptr, 0, watch_menu, reinterpret_cast<void *>(static_cast<UINT_PTR>(GetCurrentThreadId())), 0, nullptr);
+    if (t) CloseHandle(t);
 }
 
 /* the page's handlers, as an app's code-behind */
@@ -473,6 +520,42 @@ static void input_step(HWND top, HWND island)
         if (format) format->get_Bold(&bold);
         printf("xamlpagetest: RichEditBox selection Bold %d\n", static_cast<int>(bold));
         CHECK("Ctrl+B in the RichEditBox bolds the selection", bold == mut::FormatEffect_On);
+        /* (XAML text input, part 6: the context menu) back to the TextBox,
+         * the caret in its text */
+        click(top, island, 24 + 100, 260 + 16);
+        break;
+    }
+    case 21: {
+        CHECK("the click focuses the TextBox again", focused(s_box.Get()));
+        CHECK("with nothing selected", selected_is(L""));
+        /* the right button clicked in it: its context menu opens (the
+         * framework's TextContextMenu on a PopupMenu, as a text box without a
+         * ContextFlyout shows it), and Up, Enter choose its last command,
+         * Select All */
+        start_watch(VK_UP, VK_RETURN);
+        LPARAM at = island_point(top, island, 24 + 100, 260 + 16);
+        PostMessageW(island, WM_MOUSEMOVE, 0, at);
+        PostMessageW(island, WM_RBUTTONDOWN, MK_RBUTTON, at);
+        PostMessageW(island, WM_RBUTTONUP, 0, at);
+        break;
+    }
+    case 22:
+        if (!s_menu_seen && ++s_menu_waits < 40) { s_step--; break; }   /* (the menu opens, then closes) */
+        CHECK("the right button opens the TextBox's context menu", s_menu_seen == 1);
+        CHECK("its Select All selects the text", selected_is(L"HiHi"));
+        break;
+    case 23:
+        /* the menu key opens it too; Escape closes it, choosing nothing */
+        start_watch(VK_ESCAPE, 0);
+        post_key(island, VK_APPS);
+        break;
+    case 24:
+        if (!s_menu_seen && ++s_menu_waits < 40) { s_step--; break; }
+        CHECK("the menu key opens the TextBox's context menu", s_menu_seen == 1);
+        CHECK("Escape closes it, the text and selection as they were", box_text_is(L"HiHi") && selected_is(L"HiHi"));
+        break;
+    case 25: {
+        CHECK("and the TextBox keeps the focus", focused(s_box.Get()));
         break;
     }
     }

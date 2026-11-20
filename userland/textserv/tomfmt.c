@@ -14,7 +14,8 @@
  * live too: its alignment is that of the paragraphs the range touches
  * (tomUndefined where they differ, runs.c), and setting it aligns them;
  * GetDuplicate, SetDuplicate (ITextRange::SetPara) and IsEqual work on the
- * alignment (XAML text input, part 7).  The other properties
+ * alignment (XAML text input, part 7) and the indents (first line, left,
+ * right: part 8).  The other properties
  * answer E_NOTIMPL, each method by its own number of arguments (the
  * interfaces are stdcall in 32-bit code, so a method pops what it is
  * given).  Written from the Text Object Model documentation.
@@ -29,6 +30,8 @@ typedef struct FMT {
     ITextRange2 *range;                           /* a live font's or paragraph's range, or null: a duplicate */
     CHARFORMAT2W cf;                              /* a duplicate font's values (dwMask: those defined) */
     LONG align;                                   /* a duplicate paragraph's alignment (PFA_, 0: undefined) */
+    LONG ind[3];                                  /* a duplicate paragraph's indents (twips, IND_) */
+    DWORD indset;                                 /* those defined (IND_ bits) */
 } FMT;
 
 #define tomFalse_      0
@@ -314,6 +317,94 @@ static HRESULT STDMETHODCALLTYPE p_getalign(FMT *f, LONG *v)
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE p_setalign(FMT *f, LONG v) { return para_put(f, v); }
+/* ---- the paragraph properties: the indents (XAML text input, part 8) ---
+ * TOM's are in points: the left indent is the lines' after the first, the
+ * first line's is from it, as PARAFORMAT's start indent and offset are the
+ * other way round (start = left + first, offset = -first) */
+static DWORD ind_value(FMT *f, LONG v[3])
+{
+    LONG a, b;
+    TS *t;
+    if (!f->range) { memcpy(v, f->ind, sizeof(f->ind)); return f->indset; }
+    if (!(t = range_of(f, &a, &b))) { memset(v, 0, 3 * sizeof(LONG)); return 0; }
+    return para_query_ind(t, a, b, v);
+}
+static HRESULT ind_put(FMT *f, DWORD set, const LONG v[3])
+{
+    LONG a, b;
+    TS *t;
+    int i;
+    if (!set) return S_OK;
+    if (!f->range) {
+        for (i = 0; i < 3; i++) if (set & (1u << i)) f->ind[i] = v[i];
+        f->indset |= set;
+        return S_OK;
+    }
+    if (!(t = range_of(f, &a, &b))) return CO_E_RELEASED_;
+    if (t->bits & TXTBIT_READONLY) return E_ACCESSDENIED;
+    return para_apply_ind(t, a, b, set, v) ? S_OK : E_INVALIDARG;
+}
+static float points(LONG twips) { return (float)twips / 20.0f; }
+static LONG twips(float pt) { return (LONG)(pt * 20.0f + (pt < 0 ? -0.5f : 0.5f)); }
+#define tomUndefinedF ((float)tomUndefined)
+#define IS_(set, i) (((set) >> (i)) & 1)
+
+static HRESULT STDMETHODCALLTYPE p_getfirst(FMT *f, float *v)
+{
+    LONG x[3];
+    DWORD set;
+    if (!v) return E_INVALIDARG;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    set = ind_value(f, x);
+    *v = IS_(set, IND_OFFSET) ? points(-x[IND_OFFSET]) : tomUndefinedF;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_getleft(FMT *f, float *v)
+{
+    LONG x[3];
+    DWORD set;
+    if (!v) return E_INVALIDARG;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    set = ind_value(f, x);
+    *v = IS_(set, IND_START) && IS_(set, IND_OFFSET) ? points(x[IND_START] + x[IND_OFFSET]) : tomUndefinedF;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_getright(FMT *f, float *v)
+{
+    LONG x[3];
+    DWORD set;
+    if (!v) return E_INVALIDARG;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    set = ind_value(f, x);
+    *v = IS_(set, IND_RIGHT) ? points(x[IND_RIGHT]) : tomUndefinedF;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE p_setright(FMT *f, float v)
+{
+    LONG x[3] = { 0, 0, 0 };
+    if (v == tomUndefinedF) return S_OK;
+    x[IND_RIGHT] = twips(v);
+    return ind_put(f, 1u << IND_RIGHT, x);
+}
+/* SetIndents(first, left, right): tomUndefined leaves one as it is */
+static HRESULT STDMETHODCALLTYPE p_setindents(FMT *f, float first, float left, float right)
+{
+    LONG cur[3], x[3] = { 0, 0, 0 };
+    DWORD set = 0, have;
+    if (f->range && !tom_range_ts(f->range)) return CO_E_RELEASED_;
+    have = ind_value(f, cur);
+    if (first != tomUndefinedF || left != tomUndefinedF) {
+        LONG fi = first != tomUndefinedF ? twips(first) : (IS_(have, IND_OFFSET) ? -cur[IND_OFFSET] : 0);
+        LONG le = left != tomUndefinedF ? twips(left)
+                : (IS_(have, IND_START) && IS_(have, IND_OFFSET) ? cur[IND_START] + cur[IND_OFFSET] : 0);
+        x[IND_START] = le + fi;
+        x[IND_OFFSET] = -fi;
+        set |= (1u << IND_START) | (1u << IND_OFFSET);
+    }
+    if (right != tomUndefinedF) { x[IND_RIGHT] = twips(right); set |= 1u << IND_RIGHT; }
+    return ind_put(f, set, x);
+}
+
 static HRESULT STDMETHODCALLTYPE p_getdup(FMT *f, void **out)
 {
     FMT *d;
@@ -325,17 +416,25 @@ static HRESULT STDMETHODCALLTYPE p_getdup(FMT *f, void **out)
     if (FAILED(hr = tom_format(FALSE, 0, (void **)&d))) return hr;
     v = para_value(f);
     d->align = pfa_align(v);
+    d->indset = ind_value(f, d->ind);
     *out = d;
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE p_setdup(FMT *f, FMT *from)
 {
+    LONG x[3];
+    DWORD set;
+    HRESULT hr;
     if (!from || !ours_para(from)) return E_INVALIDARG;
-    return para_put(f, para_value(from));
+    set = ind_value(from, x);
+    if (FAILED(hr = para_put(f, para_value(from)))) return hr;
+    return ind_put(f, set, x);
 }
 static HRESULT STDMETHODCALLTYPE p_isequal(FMT *f, FMT *other, LONG *v)
 {
-    BOOL same = other && ours_para(other) && para_value(f) == para_value(other);
+    LONG x[3], y[3];
+    BOOL same = other && ours_para(other) && para_value(f) == para_value(other)
+                && ind_value(f, x) == ind_value(other, y) && !memcmp(x, y, sizeof(x));
     if (v) *v = same ? tomTrue : tomFalse_;
     return same ? S_OK : S_FALSE;
 }
@@ -361,8 +460,11 @@ static const void *const para_vtbl[] = {
     f_qi, f_addref, f_release, f_tcount, f_tinfo, f_ids, f_invoke,
     p_getdup, p_setdup, fo_canchange, p_isequal, n1,   /* GetDuplicate, SetDuplicate, CanChange, IsEqual, Reset */
     n1, n1, p_getalign, p_setalign,               /* Get/SetStyle, Get/SetAlignment */
-    N1x16, N1x8, n1, n1,                          /* GetHyphenation .. SetRightIndent (26) */
-    n3, n2,                                       /* SetIndents, SetLineSpacing */
+    n1, n1, p_getfirst,                           /* Get/SetHyphenation, GetFirstLineIndent */
+    N1x4, p_getleft,                              /* Get/SetKeepTogether, Get/SetKeepWithNext, GetLeftIndent */
+    N1x16,                                        /* GetLineSpacing .. SetPageBreakBefore (16) */
+    p_getright, p_setright,                       /* Get/SetRightIndent */
+    p_setindents, n2,                             /* SetIndents, SetLineSpacing */
     N1x4, n1, n1, n1,                             /* GetSpaceAfter .. GetTabCount (7) */
     n3, n0, n1, n4,                               /* AddTab, ClearAllTabs, DeleteTab, GetTab */
     /* ITextPara2 */

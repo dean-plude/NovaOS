@@ -1281,7 +1281,9 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   and comes later.  Since 11-20 paragraphs have an alignment (left,
   centre, right, justified): a `TextBox`'s `TextAlignment`, and in a
   `RichEditBox` per paragraph from Ctrl+L, E, R and J and from its
-  `Document`'s `ParagraphFormat`.
+  `Document`'s `ParagraphFormat`; and indents (the first line's, the
+  others' and the right's, so hanging indents too) from
+  `ParagraphFormat.SetIndents`.
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

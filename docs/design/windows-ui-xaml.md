@@ -886,6 +886,16 @@ vendors.
      and J, TOM's `ITextPara` (live over its range: `Get/SetAlignment`,
      `GetDuplicate`, `SetPara`) and `Microsoft.UI.Text.ITextParagraphFormat`
      (`winrtfmt.c`; its other properties read 0) all reach it.
+     Paragraph indents (part 8) are kept the same way (`RUNFMT.ind`, in
+     twips as `PARAFORMAT`'s start indent, offset and right indent, each
+     either the paragraph's own or the default's): layout wraps each line
+     in the width inside its indents and adds the first line's or the
+     others' indent to `LINE.shift`, so the caret, hits and drawing
+     follow unchanged.  TOM's `ITextPara` (`GetFirstLineIndent`,
+     `GetLeftIndent`, `Get/SetRightIndent`, `SetIndents`, in points, the
+     left indent being the lines' after the first) and
+     `ITextParagraphFormat` (`FirstLineIndent`, `LeftIndent`,
+     `RightIndent`, `SetIndents`) reach them.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

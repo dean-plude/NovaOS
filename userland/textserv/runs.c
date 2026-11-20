@@ -45,10 +45,11 @@ static int intern(TS *t, const RUNFMT *f)
     g.mask &= FMT_MASK;
     g.effects &= g.mask;
     if (!(g.mask & CFM_COLOR) || (g.effects & CFE_AUTOCOLOR)) g.color = 0;
-    if (!g.mask) return 0;
+    if (!g.mask && !g.align) return 0;
     if (!t->nfmts) t->nfmts = 1;                  /* (fmts[0]: the default) */
     for (i = 1; i < t->nfmts; i++)
-        if (t->fmts[i].mask == g.mask && t->fmts[i].effects == g.effects && t->fmts[i].color == g.color) return i;
+        if (t->fmts[i].mask == g.mask && t->fmts[i].effects == g.effects && t->fmts[i].color == g.color
+            && t->fmts[i].align == g.align) return i;
     if (t->nfmts >= MAXFMT) return 0;
     t->fmts[t->nfmts] = g;
     return t->nfmts++;
@@ -180,6 +181,111 @@ BOOL fmt_toggle(TS *t, DWORD effect)
     fmt_query(t, selmin(t), selmax(t), &cf);
     on = (cf.cf.dwMask & effect) && (cf.cf.dwEffects & effect);
     return fmt_apply(t, selmin(t), selmax(t), effect, on ? 0 : effect, 0);
+}
+
+/* ---- paragraphs' alignment ---------------------------------------------
+ * A paragraph's format is its mark's, as Rich Edit's is: the '\r' that ends
+ * it carries the alignment in its character format (RUNFMT.align), so a
+ * paragraph split by Enter keeps it on both sides and two paragraphs
+ * joined take the later one's.  The final paragraph has no mark in the
+ * text: its alignment is lastalign.  Plain text has one paragraph format,
+ * lastalign, for every paragraph.  0 everywhere means the default's
+ * (defalign: the host's TxGetParaFormat, or EM_SETPARAFORMAT
+ * SPF_SETDEFAULT, which XAML's TextBox.TextAlignment sends).  Justified
+ * paragraphs draw left-aligned. */
+static LONG mark_of(TS *t, LONG cp)
+{
+    if (cp < 0) cp = 0;
+    while (cp < t->len && t->text[cp] != L'\r') cp++;
+    return cp;
+}
+
+static int own_at_mark(TS *t, LONG e)
+{
+    if (RICH(t) && e < t->len) {
+        int idx = fmt_at(t, e);
+        return (idx && idx < t->nfmts) ? t->fmts[idx].align : 0;
+    }
+    return t->lastalign;
+}
+
+int para_own(TS *t, LONG cp) { return own_at_mark(t, mark_of(t, cp)); }
+
+int para_align(TS *t, LONG cp)
+{
+    int a = para_own(t, cp);
+    return a ? a : (t->defalign ? t->defalign : PFA_LEFT);
+}
+
+int fmt_with_align(TS *t, int idx, int align)
+{
+    RUNFMT f = t->fmts[idx];
+    if (!idx || idx >= t->nfmts) memset(&f, 0, sizeof(f));
+    if (f.align == align) return idx;
+    f.align = align;
+    return intern(t, &f);
+}
+
+/* calls @fn on the mark of each paragraph [a, b) touches (one, when a == b) */
+static void each_para(TS *t, LONG a, LONG b, void (*fn)(TS *, LONG, void *), void *ctx)
+{
+    LONG e;
+    if (a > b) { LONG x = a; a = b; b = x; }
+    if (a < 0) a = 0;
+    if (b > t->len) b = t->len;
+    for (e = mark_of(t, a);; e = mark_of(t, e + 1)) {
+        fn(t, e, ctx);
+        if (e >= t->len || e + 1 >= b) break;
+    }
+}
+
+typedef struct { int first; BOOL same; } PQ;
+static void query_one(TS *t, LONG e, void *ctx)
+{
+    PQ *q = ctx;
+    int a = own_at_mark(t, e);
+    if (!a) a = t->defalign ? t->defalign : PFA_LEFT;
+    if (!q->first) q->first = a;
+    else if (q->first != a) q->same = FALSE;
+}
+
+int para_query(TS *t, LONG a, LONG b)
+{
+    PQ q = { 0, TRUE };
+    if (!RICH(t)) return para_align(t, 0);
+    each_para(t, a, b, query_one, &q);
+    return q.same ? q.first : 0;
+}
+
+static void apply_one(TS *t, LONG e, void *ctx)
+{
+    int align = *(int *)ctx;
+    if (e < t->len) t->fmt[e] = (BYTE)fmt_with_align(t, t->fmt[e], align);
+    else t->lastalign = align;
+}
+
+BOOL para_apply(TS *t, LONG a, LONG b, int align)
+{
+    if (align < PFA_LEFT || align > PFA_JUSTIFY) return FALSE;
+    if (para_query(t, a, b) == align) return TRUE;
+    t->typing = FALSE;
+    save_undo(t);
+    if (!RICH(t) || !t->fmt) t->lastalign = align;   /* (plain text: the one paragraph format) */
+    else each_para(t, a, b, apply_one, &align);
+    t->dirty = TRUE;
+    t->modified = TRUE;
+    redraw(t);
+    return TRUE;
+}
+
+void para_refresh(TS *t)
+{
+    const PARAFORMAT *pf = 0;
+    if (t->host && HOST(t)->TxGetParaFormat(t->host, &pf) == S_OK && pf && (pf->dwMask & PFM_ALIGNMENT)
+        && pf->wAlignment >= PFA_LEFT && pf->wAlignment <= PFA_JUSTIFY)
+        t->defalign = pf->wAlignment;
+    if (!RICH(t)) t->lastalign = 0;               /* (plain text's one paragraph format is the default) */
+    t->dirty = TRUE;
 }
 
 /* ---- fonts and bars ------------------------------------------------------ */

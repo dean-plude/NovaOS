@@ -872,7 +872,20 @@ vendors.
      `Invoked` handler, then the operation's `Completed`).  The
      resources still leave out the text boxes' `ContextFlyout` setters
      (`TextCommandBarFlyout`, of WinUI's controls library, which needs
-     `CommandBar`): that is what Windows 10 shows, and the next part.
+     `CommandBar`): that is what Windows 10 shows, and a later part.
+     Paragraph alignment (part 7, `runs.c`): a paragraph's format is its
+     mark's, as in Rich Edit: the `'\r'` ending it carries the alignment
+     in its character format, the final paragraph's is kept apart, and
+     plain text has one for all.  The default is the host's
+     (`TxGetParaFormat` on `TXTBIT_PARAFORMATCHANGE`, or `EM_SETPARAFORMAT`
+     with `SPF_SETDEFAULT`, which is how a `TextBox`'s `TextAlignment`
+     arrives).  Layout moves each line of a centred or right-aligned
+     paragraph right (`LINE.shift`), which the caret, hit-testing and both
+     drawing paths follow; justified paragraphs draw left-aligned.
+     `EM_SETPARAFORMAT`/`EM_GETPARAFORMAT` (`PFM_ALIGNMENT`), Ctrl+L, E, R
+     and J, TOM's `ITextPara` (live over its range: `Get/SetAlignment`,
+     `GetDuplicate`, `SetPara`) and `Microsoft.UI.Text.ITextParagraphFormat`
+     (`winrtfmt.c`; its other properties read 0) all reach it.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

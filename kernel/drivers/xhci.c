@@ -541,9 +541,10 @@ static int xhci_bulk(UsbHc *hc, UsbPipe *p, UINT32 len, UINT32 timeout_ms, bool 
     if (!xp || !XD(d)->slot) return -1;
     IrqState s;
 
-    /* An interrupt IN transfer still queued from the last call goes on
-     * waiting (a device's report is never caught between a Stop Endpoint
-     * and the next transfer) */
+    /* An IN transfer still queued from the last call (interrupt, or a
+     * Windows client's bulk: UsbPipe.keep) goes on waiting (a device's
+     * report or packet is never caught between a Stop Endpoint and the
+     * next transfer) */
     if (xp->held && xp->held_len == len && p->keep) {
         xp->held = false;
         goto wait;

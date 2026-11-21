@@ -11,8 +11,9 @@
  * nothing, as do kerning, spacing, position, the language and the
  * background colour.  A range's ParagraphFormat (ITextParagraphFormat) is
  * the same over TOM's ITextPara2: its alignment is the range's paragraphs'
- * (Left, Center, Right, Justify); indents, spacing, lists and tabs read 0
- * or Off and setting them does nothing.  Written from the Windows App SDK's Microsoft.UI.Text
+ * (Left, Center, Right, Justify) and so are its indents (first line, left,
+ * right: XAML text input, part 8); spacing, lists and tabs read 0 or Off
+ * and setting them does nothing.  Written from the Windows App SDK's Microsoft.UI.Text
  * documentation; the methods in Microsoft.UI.Text.winmd's order.
  */
 #include "tsint.h"
@@ -297,6 +298,12 @@ static const IID iid_wpf = {0x219b6cdf, 0x0d0b, 0x5701, {0xb8, 0xa1, 0x6c, 0x90,
 #define P_SETDUP 1
 #define P_ISEQUAL 3
 #define P_GETALIGN 7
+#define P_GETFIRST 11
+#define P_GETLEFT 16
+#define P_GETRIGHT 33
+#define P_SETRIGHT 34
+#define P_SETINDENTS 35
+typedef HRESULT (STDMETHODCALLTYPE *GETF)(IUnknown *, float *);
 
 static HRESULT STDMETHODCALLTYPE p_qi(void *me, REFIID iid, void **out)
 {
@@ -349,8 +356,27 @@ static HRESULT STDMETHODCALLTYPE p_GetTab(void *me, INT32 index, float *position
     if (leader) *leader = 0;
     return E_INVALIDARG;                            /* (no tabs) */
 }
+/* the indents, in points, TOM's (undefined where the paragraphs differ: 0) */
+static HRESULT get_indent(void *me, int slot, float *value)
+{
+    float v = 0;
+    HRESULT hr;
+    if (!value) return E_POINTER;
+    hr = PARA(me, slot, GETF)(W(me)->tom, &v);
+    *value = FAILED(hr) || v == (float)tomUndefined ? 0 : v;
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE p_get_FirstLineIndent(void *me, float *value) { return get_indent(me, P_GETFIRST, value); }
+static HRESULT STDMETHODCALLTYPE p_get_LeftIndent(void *me, float *value) { return get_indent(me, P_GETLEFT, value); }
+static HRESULT STDMETHODCALLTYPE p_get_RightIndent(void *me, float *value) { return get_indent(me, P_GETRIGHT, value); }
+static HRESULT STDMETHODCALLTYPE p_put_RightIndent(void *me, float value)
+{
+    return PARA(me, P_SETRIGHT, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, float))(W(me)->tom, value);
+}
 static HRESULT STDMETHODCALLTYPE p_SetIndents(void *me, float start, float left, float right)
-{ (void)me; (void)start; (void)left; (void)right; return S_OK; }
+{
+    return PARA(me, P_SETINDENTS, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, float, float, float))(W(me)->tom, start, left, right);
+}
 static HRESULT STDMETHODCALLTYPE p_SetLineSpacing(void *me, INT32 rule, float spacing)
 { (void)me; (void)rule; (void)spacing; return S_OK; }
 
@@ -387,10 +413,10 @@ static HRESULT STDMETHODCALLTYPE p_IsEqual(void *me, void *format, BYTE *result)
 static const VFN wpf_vtbl[] = {
     (VFN)p_qi, (VFN)c_addref, (VFN)c_release, (VFN)c_iids, (VFN)p_name, (VFN)c_trust,
     (VFN)p_get_Alignment, (VFN)p_put_Alignment,
-    (VFN)c_get_zero,                                       /* FirstLineIndent */
+    (VFN)p_get_FirstLineIndent,                            /* FirstLineIndent */
     (VFN)c_get_off, (VFN)c_put_none,                       /* KeepTogether */
     (VFN)c_get_off, (VFN)c_put_none,                       /* KeepWithNext */
-    (VFN)c_get_zero,                                       /* LeftIndent */
+    (VFN)p_get_LeftIndent,                                 /* LeftIndent */
     (VFN)p_get_spacing,                                    /* LineSpacing */
     (VFN)p_get_rule,                                       /* LineSpacingRule */
     (VFN)p_get_long, (VFN)c_put_none,                      /* ListAlignment */
@@ -401,7 +427,7 @@ static const VFN wpf_vtbl[] = {
     (VFN)p_get_long, (VFN)c_put_none,                      /* ListType (None) */
     (VFN)c_get_off, (VFN)c_put_none,                       /* NoLineNumber */
     (VFN)c_get_off, (VFN)c_put_none,                       /* PageBreakBefore */
-    (VFN)c_get_zero, (VFN)c_put_float,                     /* RightIndent */
+    (VFN)p_get_RightIndent, (VFN)p_put_RightIndent,        /* RightIndent */
     (VFN)c_get_off, (VFN)c_put_none,                       /* RightToLeft */
     (VFN)p_get_long, (VFN)c_put_none,                      /* Style */
     (VFN)c_get_zero, (VFN)c_put_float,                     /* SpaceAfter */

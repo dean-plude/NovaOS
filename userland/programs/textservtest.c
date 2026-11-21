@@ -1327,6 +1327,151 @@ static void alignment(HDC dc)
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
 }
 
+/* ---- paragraph indents (XAML text input, part 8) ------------------------ */
+static LRESULT set_indents(WPARAM wp, DWORD mask, LONG start, LONG right, LONG offset)
+{
+    PARAFORMAT pf;
+    memset(&pf, 0, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = mask;
+    pf.dxStartIndent = start;
+    pf.dxRightIndent = right;
+    pf.dxOffset = offset;
+    return msg(EM_SETPARAFORMAT, wp, (LPARAM)&pf);
+}
+static PARAFORMAT para_of(LONG a, LONG b)
+{
+    PARAFORMAT pf;
+    memset(&pf, 0, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    set_sel(a, b);
+    msg(EM_GETPARAFORMAT, 0, (LPARAM)&pf);
+    return pf;
+}
+static LONG x_at(LONG cp)
+{
+    POINTL pt = {-1, -1};
+    msg(EM_POSFROMCHAR, (WPARAM)&pt, cp);
+    return pt.x;
+}
+static void indents(HDC dc)
+{
+    static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+    static const IID iid_wdoc = {0x1149d57d, 0x86a6, 0x59dd, {0x88, 0xd9, 0x19, 0x6f, 0x27, 0xbc, 0x5c, 0x85}};
+    static const WCHAR words[] = L"aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu vvvv";
+    DWORD bits = host.bits;
+    ITextDocument2 *d = 0;
+    ITextRange2 *r = 0;
+    IUnknown *para = 0, *dup = 0, *doc = 0, *wr = 0, *wpf = 0;
+    PARAFORMAT pf;
+    float f1 = -1, f2 = -1, f3 = -1;
+    LONG l1, x0, x1;
+    int x;
+
+    host.bits |= TXTBIT_RICHTEXT | TXTBIT_MULTILINE;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
+    pf = para_of(0, 0);
+    check("paragraphs have no indents by default", (pf.dwMask & (PFM_STARTINDENT | PFM_RIGHTINDENT | PFM_OFFSET)) ==
+          (PFM_STARTINDENT | PFM_RIGHTINDENT | PFM_OFFSET) && !pf.dxStartIndent && !pf.dxRightIndent && !pf.dxOffset);
+    set_sel(1, 1);
+    check("EM_SETPARAFORMAT(PFM_STARTINDENT) indents the caret's paragraph", set_indents(0, PFM_STARTINDENT, 720, 0, 0) != 0);
+    set_sel(0, 0);
+    draw(dc);
+    x = leftmost_dark(12);
+    check("... half an inch: drawn 48 pixels right", x >= 48 && x < 58);
+    check("... its characters and the caret move with it", x_at(0) == 48 && host.caret.x == 48);
+    check("... the next paragraph's do not", x_at(3) == 0);
+    pf = para_of(1, 1);
+    check("EM_GETPARAFORMAT: its start indent", (pf.dwMask & PFM_STARTINDENT) && pf.dxStartIndent == 720);
+    pf = para_of(0, 5);
+    check("... over both: undefined (PFM_STARTINDENT clear), the right indent the same", !(pf.dwMask & PFM_STARTINDENT) && (pf.dwMask & PFM_RIGHTINDENT));
+    set_sel(2, 2);
+    type(L"\r");
+    check("Enter in an indented paragraph: both parts indented",
+          para_of(0, 0).dxStartIndent == 720 && para_of(3, 3).dxStartIndent == 720 && para_of(5, 5).dxStartIndent == 0);
+    ctrl_key('Z');
+    set_sel(4, 4);
+    set_indents(0, PFM_OFFSETINDENT, 360, 0, 0);
+    check("PFM_OFFSETINDENT moves the start indent", para_of(4, 4).dxStartIndent == 360 && x_at(3) == 24);
+    ctrl_key('Z');
+    check("Ctrl+Z undoes an indent", para_of(4, 4).dxStartIndent == 0 && x_at(3) == 0);
+    /* a hanging indent and a right indent: the lines after the first start
+     * dxOffset from it, and every line wraps before the right indent */
+    host.bits |= TXTBIT_WORDWRAP;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_WORDWRAP, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)words);
+    l1 = (LONG)msg(EM_LINEINDEX, 1, 0);
+    set_sel(0, 0);
+    set_indents(0, PFM_STARTINDENT | PFM_OFFSET, 0, 0, 720);
+    check("a hanging indent: the first line at the left, the next 48 pixels in",
+          x_at(0) == 0 && msg(EM_LINEINDEX, 1, 0) > 0 && x_at((LONG)msg(EM_LINEINDEX, 1, 0)) == 48);
+    check("... the lines wrap sooner (narrower)", msg(EM_LINEINDEX, 2, 0) > 0 && msg(EM_LINEINDEX, 2, 0) < 2 * l1);
+    x0 = x_at((LONG)msg(EM_LINEINDEX, 1, 0) - 1);
+    set_indents(0, PFM_STARTINDENT | PFM_OFFSET | PFM_RIGHTINDENT, 0, 1440, 0);
+    x1 = (LONG)msg(EM_LINEINDEX, 1, 0);
+    check("a right indent: the first line wraps before it", x1 > 0 && x1 < l1 && x_at(x1 - 1) <= 240 - 96);
+    (void)x0;
+    set_indents(0, PFM_STARTINDENT | PFM_OFFSET | PFM_RIGHTINDENT, 0, 0, 0);
+    host.bits &= ~TXTBIT_WORDWRAP;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_WORDWRAP, host.bits);
+    /* the Text Object Model's paragraph: points, the left indent the lines
+     * after the first's, the first line's from it */
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
+    ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+    if (d) d->lpVtbl->Range2(d, 0, 0, &r);
+    if (r) r->lpVtbl->GetPara(r, (void **)&para);
+    if (para) {
+        PSLOT(para, 35, HRESULT (STDMETHODCALLTYPE *)(void *, float, float, float))(para, 18.0f, 36.0f, 9.0f);   /* SetIndents */
+        pf = para_of(0, 0);
+        check("ITextPara.SetIndents(18, 36, 9): start 54 pt, offset -18 pt, right 9 pt",
+              pf.dxStartIndent == 1080 && pf.dxOffset == -360 && pf.dxRightIndent == 180 && para_of(4, 4).dxStartIndent == 0);
+        PSLOT(para, 11, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(para, &f1);   /* GetFirstLineIndent */
+        PSLOT(para, 16, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(para, &f2);   /* GetLeftIndent */
+        PSLOT(para, 33, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(para, &f3);   /* GetRightIndent */
+        check("ITextPara.GetFirstLineIndent, GetLeftIndent, GetRightIndent", f1 == 18.0f && f2 == 36.0f && f3 == 9.0f);
+        PSLOT(para, 0, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(para, (void **)&dup);   /* GetDuplicate */
+        r->lpVtbl->SetEnd(r, 5);
+        PSLOT(para, 16, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(para, &f2);
+        check("... live: over both paragraphs the left indent is tomUndefined", f2 == (float)tomUndefined);
+        PSLOT(para, 34, HRESULT (STDMETHODCALLTYPE *)(void *, float))(para, 4.5f);   /* SetRightIndent */
+        check("ITextPara.SetRightIndent sets both", para_of(0, 0).dxRightIndent == 90 && para_of(4, 4).dxRightIndent == 90);
+        r->lpVtbl->SetRange(r, 4, 4);
+        if (dup) r->lpVtbl->SetPara(r, dup);
+        pf = para_of(4, 4);
+        check("ITextRange.SetPara applies a duplicate's indents", pf.dxStartIndent == 1080 && pf.dxOffset == -360 && pf.dxRightIndent == 180);
+        if (dup) dup->lpVtbl->Release(dup);
+        para->lpVtbl->Release(para);
+    } else check("ITextRange.GetPara", 0);
+    if (r) r->lpVtbl->Release(r);
+    if (d) d->lpVtbl->Release(d);
+    /* the Windows Runtime's: ParagraphFormat.SetIndents, LeftIndent */
+    ts->lpVtbl->QueryInterface(ts, &iid_wdoc, (void **)&doc);
+    if (doc) WSLOT(doc, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, void **))(doc, 0, 1, (void **)&wr);
+    if (wr) WSLOT(wr, 13, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(wr, (void **)&wpf);   /* get_ParagraphFormat */
+    if (wpf) {
+        WSLOT(wpf, 46, HRESULT (STDMETHODCALLTYPE *)(void *, float, float, float))(wpf, 0.0f, 12.0f, 0.0f);   /* SetIndents */
+        f2 = -1;
+        WSLOT(wpf, 7, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(wpf, &f2);   /* get_LeftIndent */
+        check("ITextParagraphFormat.SetIndents(0, 12, 0), LeftIndent 12", f2 == 12.0f && para_of(0, 0).dxStartIndent == 240 && x_at(0) == 16);
+        wpf->lpVtbl->Release(wpf);
+    } else check("ITextRange.ParagraphFormat", 0);
+    if (wr) wr->lpVtbl->Release(wr);
+    if (doc) doc->lpVtbl->Release(doc);
+    set_sel(0, -1);
+    set_indents(0, PFM_STARTINDENT | PFM_OFFSET | PFM_RIGHTINDENT, 0, 0, 0);
+    /* plain text: one paragraph format; SPF_SETDEFAULT sets the default's */
+    host.bits &= ~(TXTBIT_RICHTEXT | TXTBIT_MULTILINE);
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab");
+    set_indents(SPF_SETDEFAULT, PFM_STARTINDENT, 300, 0, 0);
+    check("plain text: SPF_SETDEFAULT's start indent", para_of(0, 0).dxStartIndent == 300 && x_at(0) == 20);
+    set_indents(SPF_SETDEFAULT, PFM_STARTINDENT, 0, 0, 0);
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.bits = bits;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE | TXTBIT_WORDWRAP, host.bits);
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -1371,6 +1516,7 @@ int main(void)
     winrt();
     formatting(dc);
     alignment(dc);
+    indents(dc);
     drawd2d(dc);
     others();
 

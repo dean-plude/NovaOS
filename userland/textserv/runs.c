@@ -41,15 +41,23 @@ int fmt_at(TS *t, LONG cp)
 static int intern(TS *t, const RUNFMT *f)
 {
     int i;
-    RUNFMT g = *f;
+    RUNFMT g;
+    memset(&g, 0, sizeof(g));                     /* (INDENTS' padding: compared whole) */
+    g.mask = f->mask;
+    g.effects = f->effects;
+    g.color = f->color;
+    g.align = f->align;
+    g.ind.set = f->ind.set;
+    memcpy(g.ind.v, f->ind.v, sizeof(g.ind.v));
     g.mask &= FMT_MASK;
     g.effects &= g.mask;
     if (!(g.mask & CFM_COLOR) || (g.effects & CFE_AUTOCOLOR)) g.color = 0;
-    if (!g.mask && !g.align) return 0;
+    for (i = 0; i < 3; i++) if (!(g.ind.set & (1 << i))) g.ind.v[i] = 0;
+    if (!g.mask && !g.align && !g.ind.set) return 0;
     if (!t->nfmts) t->nfmts = 1;                  /* (fmts[0]: the default) */
     for (i = 1; i < t->nfmts; i++)
         if (t->fmts[i].mask == g.mask && t->fmts[i].effects == g.effects && t->fmts[i].color == g.color
-            && t->fmts[i].align == g.align) return i;
+            && t->fmts[i].align == g.align && !memcmp(&t->fmts[i].ind, &g.ind, sizeof(g.ind))) return i;
     if (t->nfmts >= MAXFMT) return 0;
     t->fmts[t->nfmts] = g;
     return t->nfmts++;
@@ -281,11 +289,133 @@ BOOL para_apply(TS *t, LONG a, LONG b, int align)
 void para_refresh(TS *t)
 {
     const PARAFORMAT *pf = 0;
-    if (t->host && HOST(t)->TxGetParaFormat(t->host, &pf) == S_OK && pf && (pf->dwMask & PFM_ALIGNMENT)
-        && pf->wAlignment >= PFA_LEFT && pf->wAlignment <= PFA_JUSTIFY)
-        t->defalign = pf->wAlignment;
-    if (!RICH(t)) t->lastalign = 0;               /* (plain text's one paragraph format is the default) */
+    if (t->host && HOST(t)->TxGetParaFormat(t->host, &pf) == S_OK && pf) {
+        if ((pf->dwMask & PFM_ALIGNMENT) && pf->wAlignment >= PFA_LEFT && pf->wAlignment <= PFA_JUSTIFY)
+            t->defalign = pf->wAlignment;
+        if (pf->dwMask & PFM_STARTINDENT) t->defind[IND_START] = pf->dxStartIndent;
+        if (pf->dwMask & PFM_RIGHTINDENT) t->defind[IND_RIGHT] = pf->dxRightIndent;
+        if (pf->dwMask & PFM_OFFSET) t->defind[IND_OFFSET] = pf->dxOffset;
+    }
+    if (!RICH(t)) {                               /* (plain text's one paragraph format is the default) */
+        t->lastalign = 0;
+        memset(&t->lastind, 0, sizeof(t->lastind));
+    }
     t->dirty = TRUE;
+}
+
+/* ---- paragraphs' indents (XAML text input, part 8) ----------------------
+ * Kept as the alignment is: on the paragraph's mark (RUNFMT.ind), the
+ * final paragraph's in lastind, plain text's one set in lastind, and those
+ * a paragraph does not set its own are the default's (defind: the host's
+ * TxGetParaFormat, or EM_SETPARAFORMAT SPF_SETDEFAULT).  In twips, as
+ * PARAFORMAT's: the first line starts dxStartIndent from the left, the
+ * others dxOffset from it, and every line ends dxRightIndent before the
+ * right; a line never starts left of the text's left edge. */
+static INDENTS own_ind_at_mark(TS *t, LONG e)
+{
+    INDENTS none;
+    if (RICH(t) && e < t->len) {
+        int idx = fmt_at(t, e);
+        if (idx && idx < t->nfmts) return t->fmts[idx].ind;
+        memset(&none, 0, sizeof(none));
+        return none;
+    }
+    return t->lastind;
+}
+
+static void resolve_ind(TS *t, const INDENTS *own, LONG v[3])
+{
+    int i;
+    for (i = 0; i < 3; i++) v[i] = (own->set & (1 << i)) ? own->v[i] : t->defind[i];
+}
+
+void para_indents(TS *t, LONG cp, LONG v[3])
+{
+    INDENTS own = own_ind_at_mark(t, mark_of(t, cp));
+    resolve_ind(t, &own, v);
+}
+
+void para_px(TS *t, LONG cp, LONG *first, LONG *rest, LONG *right)
+{
+    LONG v[3];
+    para_indents(t, cp, v);
+    *first = v[IND_START] > 0 ? v[IND_START] / 15 : 0;          /* (1440 twips an inch, 96 pixels) */
+    *rest = v[IND_START] + v[IND_OFFSET] > 0 ? (v[IND_START] + v[IND_OFFSET]) / 15 : 0;
+    *right = v[IND_RIGHT] > 0 ? v[IND_RIGHT] / 15 : 0;
+}
+
+int fmt_with_para(TS *t, int idx, LONG cp)
+{
+    LONG e = mark_of(t, cp);
+    RUNFMT f = t->fmts[idx];
+    if (!idx || idx >= t->nfmts) memset(&f, 0, sizeof(f));
+    f.align = own_at_mark(t, e);
+    f.ind = own_ind_at_mark(t, e);
+    return intern(t, &f);
+}
+
+typedef struct { LONG first[3]; DWORD same; BOOL any; } IQ;
+static void query_ind_one(TS *t, LONG e, void *ctx)
+{
+    IQ *q = ctx;
+    INDENTS own = own_ind_at_mark(t, e);
+    LONG v[3];
+    int i;
+    resolve_ind(t, &own, v);
+    if (!q->any) { memcpy(q->first, v, sizeof(v)); q->any = TRUE; return; }
+    for (i = 0; i < 3; i++) if (v[i] != q->first[i]) q->same &= ~(1u << i);
+}
+
+DWORD para_query_ind(TS *t, LONG a, LONG b, LONG v[3])
+{
+    IQ q;
+    memset(&q, 0, sizeof(q));
+    q.same = 7;
+    if (!RICH(t)) { para_indents(t, 0, v); return 7; }
+    each_para(t, a, b, query_ind_one, &q);
+    memcpy(v, q.first, sizeof(q.first));
+    return q.same;
+}
+
+typedef struct { DWORD set; const LONG *v; } IA;
+static void apply_ind_one(TS *t, LONG e, void *ctx)
+{
+    IA *x = ctx;
+    INDENTS own = own_ind_at_mark(t, e);
+    int i;
+    for (i = 0; i < 3; i++)
+        if (x->set & (1u << i)) { own.set |= (BYTE)(1 << i); own.v[i] = x->v[i]; }
+    if (e < t->len) {
+        RUNFMT f = t->fmts[t->fmt[e]];
+        if (!t->fmt[e] || t->fmt[e] >= t->nfmts) memset(&f, 0, sizeof(f));
+        f.ind = own;
+        t->fmt[e] = (BYTE)intern(t, &f);
+    } else t->lastind = own;
+}
+
+BOOL para_apply_ind(TS *t, LONG a, LONG b, DWORD set, const LONG v[3])
+{
+    LONG cur[3];
+    IA x;
+    int i;
+    DWORD same;
+    set &= 7;
+    if (!set) return TRUE;
+    same = para_query_ind(t, a, b, cur);
+    for (i = 0; i < 3; i++) if ((set & (1u << i)) && (!(same & (1u << i)) || cur[i] != v[i])) break;
+    if (i == 3) return TRUE;                      /* (nothing changes) */
+    t->typing = FALSE;
+    save_undo(t);
+    x.set = set;
+    x.v = v;
+    if (!RICH(t) || !t->fmt) {                    /* (plain text: the one paragraph format) */
+        for (i = 0; i < 3; i++)
+            if (set & (1u << i)) { t->lastind.set |= (BYTE)(1 << i); t->lastind.v[i] = v[i]; }
+    } else each_para(t, a, b, apply_ind_one, &x);
+    t->dirty = TRUE;
+    t->modified = TRUE;
+    redraw(t);
+    return TRUE;
 }
 
 /* ---- fonts and bars ------------------------------------------------------ */

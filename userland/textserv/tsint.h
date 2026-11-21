@@ -12,15 +12,24 @@ int memcmp(const void *a, const void *b, size_t n);
 #define UNDO_MAX    100
 #define DEFAULT_MAX 32767                         /* Rich Edit's text limit until EM_EXLIMITTEXT */
 
-typedef struct { WCHAR *text; BYTE *fmt; LONG len, anchor, active; int lastalign; } SNAP;
+/* a paragraph's indents in twips (XAML text input, part 8): the first
+ * line's from the left (start), the right's, and the other lines' from the
+ * first's (offset), as PARAFORMAT's; set: which of them are its own
+ * (IND_ bits), the rest being the default paragraph format's */
+#define IND_START  0
+#define IND_RIGHT  1
+#define IND_OFFSET 2
+typedef struct { BYTE set; LONG v[3]; } INDENTS;
+typedef struct { WCHAR *text; BYTE *fmt; LONG len, anchor, active; int lastalign; INDENTS lastind; } SNAP;
 /* a character format of rich text (runs.c): the default's properties that
  * it sets (mask: CFM_BOLD, CFM_ITALIC, CFM_UNDERLINE, CFM_STRIKEOUT,
  * CFM_COLOR) and their values (CFE_ bits, the same as the CFM_ ones); on a
- * paragraph mark, also its paragraph's alignment (PFA_, 0: the default's) */
-typedef struct { DWORD mask, effects; COLORREF color; int align; } RUNFMT;
+ * paragraph mark, also its paragraph's alignment (PFA_, 0: the default's)
+ * and indents */
+typedef struct { DWORD mask, effects; COLORREF color; int align; INDENTS ind; } RUNFMT;
 #define MAXFMT 255
 #define FMT_MASK (CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_COLOR)
-typedef struct { LONG start, len, width, shift; } LINE;  /* a laid-out line: [start, start+len), drawn @shift right (its alignment) */
+typedef struct { LONG start, len, width, shift, pad; } LINE;  /* a laid-out line: [start, start+len), drawn @shift right (its indent and alignment); @pad: its indents' width */
 
 typedef struct TS {
     IUnknown inner;                               /* the object's own IUnknown (aggregation) */
@@ -80,6 +89,9 @@ typedef struct TS {
     /* paragraph alignment (runs.c; XAML text input, part 7) */
     int defalign;                                 /* the default paragraph format's (PFA_), the host's or SPF_SETDEFAULT's */
     int lastalign;                                /* the final paragraph's, or (plain text) every paragraph's; 0: the default */
+    /* paragraph indents (runs.c; XAML text input, part 8) */
+    LONG defind[3];                               /* the default paragraph format's (twips, IND_) */
+    INDENTS lastind;                              /* the final paragraph's, or (plain text) every paragraph's */
 } TS;
 
 #define FROM_IFACE(p) ((TS *)((char *)(p) - __builtin_offsetof(TS, iface)))
@@ -175,5 +187,11 @@ int para_own(TS *t, LONG cp);                     /* its own (0: the default's) 
 int para_query(TS *t, LONG a, LONG b);            /* that of the paragraphs [a, b) touches, or 0 when they differ */
 BOOL para_apply(TS *t, LONG a, LONG b, int align);
 int fmt_with_align(TS *t, int idx, int align);    /* format @idx as a paragraph mark aligned @align */
-void para_refresh(TS *t);                         /* the host's default paragraph format (TxGetParaFormat) */
+void para_refresh(TS *t);
+/* paragraphs' indents (twips, by IND_START, IND_RIGHT, IND_OFFSET) */
+int fmt_with_para(TS *t, int idx, LONG cp);       /* format @idx as a mark of the paragraph holding @cp's format */
+void para_indents(TS *t, LONG cp, LONG v[3]);     /* those of the paragraph holding @cp */
+DWORD para_query_ind(TS *t, LONG a, LONG b, LONG v[3]);   /* those of the paragraphs [a, b) touches: IND_ bits of those the same */
+BOOL para_apply_ind(TS *t, LONG a, LONG b, DWORD set, const LONG v[3]);   /* set those @set (IND_ bits) names */
+void para_px(TS *t, LONG cp, LONG *first, LONG *rest, LONG *right);   /* (layout's: in pixels, never negative) */                         /* the host's default paragraph format (TxGetParaFormat) */
 void fmt_decorate(TS *t, DWORD effects, LONG x0, LONG x1, LONG y, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx);

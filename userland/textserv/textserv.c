@@ -238,6 +238,7 @@ static void add_line(TS *t, LONG start, LONG len, LONG width)
     t->lines[t->nlines].len = len;
     t->lines[t->nlines].width = width;
     t->lines[t->nlines].shift = 0;
+    t->lines[t->nlines].pad = 0;
     t->nlines++;
 }
 
@@ -258,8 +259,9 @@ static void layout(TS *t, HDC dc, LONG width)
     t->nlines = 0;
     t->aligned = FALSE;
     for (;;) {
-        LONG e = p, n;
-        int first = t->nlines, align, i;
+        LONG e = p, n, first, rest, right;
+        int firstline = t->nlines, align, i;
+        para_px(t, p, &first, &rest, &right);   /* (its indents, in pixels) */
         while (e < t->len && t->text[e] != L'\r') e++;
         n = e - p;
         if (n == 0) add_line(t, p, 0, 0);
@@ -270,8 +272,10 @@ static void layout(TS *t, HDC dc, LONG width)
             measure(t, dc, p, n, dx, &sz);
             while (s < e) {
                 LONG base = s > p ? dx[s - p - 1] : 0, k = s, brk = -1;
+                LONG room = width - (s > p ? rest : first) - right;   /* (the line's width inside its indents) */
+                if (room < 1) room = 1;
                 if (!wrap) { add_line(t, s, e - s, dx[n - 1] - base); break; }
-                while (k < e && dx[k - p] - base <= width) {
+                while (k < e && dx[k - p] - base <= room) {
                     if (t->text[k] == L' ') brk = k + 1;
                     k++;
                 }
@@ -282,11 +286,16 @@ static void layout(TS *t, HDC dc, LONG width)
             }
             release(dx);
         }
-        /* the paragraph's lines move right as its alignment says */
+        /* the paragraph's lines move right by their indent and as its
+         * alignment says, in the width inside its indents */
         align = para_align(t, p);
-        if (align == PFA_CENTER || align == PFA_RIGHT) {
+        if (align == PFA_CENTER || align == PFA_RIGHT || first || rest || right) {
             t->aligned = TRUE;
-            for (i = first; i < t->nlines; i++) t->lines[i].shift = align_shift(align, t->lines[i].width, width);
+            for (i = firstline; i < t->nlines; i++) {
+                LONG ind = i == firstline ? first : rest, room = width - ind - right;
+                t->lines[i].pad = ind + right;
+                t->lines[i].shift = ind + ((align == PFA_CENTER || align == PFA_RIGHT) ? align_shift(align, t->lines[i].width, room) : 0);
+            }
         }
         if (e >= t->len) break;
         p = e + 1;
@@ -496,6 +505,7 @@ static BOOL snap_take(TS *t, SNAP *s)
     if (t->fmt) memcpy(s->fmt, t->fmt, t->len);
     s->len = t->len;
     s->lastalign = t->lastalign;
+    s->lastind = t->lastind;
     s->anchor = t->anchor;
     s->active = t->active;
     return TRUE;
@@ -541,6 +551,7 @@ static void restore(TS *t, SNAP *s)
         t->len = s->len;
     }
     t->lastalign = s->lastalign;
+    t->lastind = s->lastind;
     t->anchor = s->anchor;
     t->active = s->active;
     snap_free(s);
@@ -615,8 +626,8 @@ LONG splice(TS *t, LONG a, LONG b, const WCHAR *s, LONG n, BOOL undoable, BOOL t
     if (!reserve(t, t->len - (b - a) + k)) { release(norm); return -1; }
     f = fmt_insertion(t, a, b);                   /* (rich text's: runs.c) */
     /* (a paragraph mark put in splits the paragraph the text goes into:
-     * both parts keep its alignment) */
-    fr = RICH(t) ? fmt_with_align(t, f, para_own(t, b)) : f;
+     * both parts keep its alignment and indents) */
+    fr = RICH(t) ? fmt_with_para(t, f, b) : f;
     memmove(t->text + a + k, t->text + b, (t->len - b) * sizeof(WCHAR));
     memcpy(t->text + a, norm, k * sizeof(WCHAR));
     memmove(t->fmt + a + k, t->fmt + b, t->len - b);
@@ -1216,27 +1227,57 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         t->accels = (DWORD)lp & (CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE);
         r = 1;
         break;
-    case EM_GETPARAFORMAT: {                      /* (the selection's paragraphs: their alignment) */
+    case EM_GETPARAFORMAT: {                      /* (the selection's paragraphs: their alignment and indents) */
         PARAFORMAT *pf = (PARAFORMAT *)lp;
         if (pf && pf->cbSize >= sizeof(PARAFORMAT) - sizeof(pf->rgxTabs)) {
             int a = para_query(t, selmin(t), selmax(t));
+            LONG v[3];
+            DWORD same = para_query_ind(t, selmin(t), selmax(t), v);
             pf->dwMask = a ? PFM_ALIGNMENT : 0;
             pf->wAlignment = (WORD)(a ? a : para_align(t, selmin(t)));
+            if (same & (1 << IND_START)) pf->dwMask |= PFM_STARTINDENT;
+            if (same & (1 << IND_RIGHT)) pf->dwMask |= PFM_RIGHTINDENT;
+            if (same & (1 << IND_OFFSET)) pf->dwMask |= PFM_OFFSET;
+            pf->dxStartIndent = v[IND_START];
+            pf->dxRightIndent = v[IND_RIGHT];
+            pf->dxOffset = v[IND_OFFSET];
             r = pf->dwMask;
         }
         break;
     }
-    case EM_SETPARAFORMAT: {                      /* (the alignment; SPF_SETDEFAULT: the default's) */
+    case EM_SETPARAFORMAT: {                      /* (the alignment and indents; SPF_SETDEFAULT: the default's) */
         const PARAFORMAT *pf = (const PARAFORMAT *)lp;
+        DWORD set = 0;
+        LONG v[3], cur[3];
+        int i;
         r = TRUE;
-        if (!pf || pf->cbSize < sizeof(PARAFORMAT) - sizeof(pf->rgxTabs) || !(pf->dwMask & PFM_ALIGNMENT)) break;
-        if (pf->wAlignment < PFA_LEFT || pf->wAlignment > PFA_JUSTIFY) { r = FALSE; break; }
+        if (!pf || pf->cbSize < sizeof(PARAFORMAT) - sizeof(pf->rgxTabs)) break;
+        if ((pf->dwMask & PFM_ALIGNMENT) && (pf->wAlignment < PFA_LEFT || pf->wAlignment > PFA_JUSTIFY)) { r = FALSE; break; }
+        /* (PFM_OFFSETINDENT: dxStartIndent moves the start indent, from
+         * that of the first paragraph) */
+        para_query_ind(t, selmin(t), selmax(t), cur);
+        v[IND_START] = (pf->dwMask & PFM_OFFSETINDENT) ? cur[IND_START] + pf->dxStartIndent : pf->dxStartIndent;
+        v[IND_RIGHT] = pf->dxRightIndent;
+        v[IND_OFFSET] = pf->dxOffset;
+        if (pf->dwMask & (PFM_STARTINDENT | PFM_OFFSETINDENT)) set |= 1 << IND_START;
+        if (pf->dwMask & PFM_RIGHTINDENT) set |= 1 << IND_RIGHT;
+        if (pf->dwMask & PFM_OFFSET) set |= 1 << IND_OFFSET;
         if (wp & SPF_SETDEFAULT) {                /* (plain text's one paragraph format is the default) */
-            t->defalign = pf->wAlignment;
-            if (!RICH(t)) t->lastalign = 0;
+            if (pf->dwMask & PFM_ALIGNMENT) {
+                t->defalign = pf->wAlignment;
+                if (!RICH(t)) t->lastalign = 0;
+            }
+            for (i = 0; i < 3; i++)
+                if (set & (1u << i)) {
+                    t->defind[i] = v[i];
+                    if (!RICH(t)) t->lastind.set &= (BYTE)~(1 << i);
+                }
             t->dirty = TRUE;
             redraw(t);
-        } else r = para_apply(t, selmin(t), selmax(t), pf->wAlignment);
+        } else {
+            if (pf->dwMask & PFM_ALIGNMENT) r = para_apply(t, selmin(t), selmax(t), pf->wAlignment);
+            if (r && set) r = para_apply_ind(t, selmin(t), selmax(t), set, v);
+        }
         if (r && t->focus) update_caret(t);
         break;
     }
@@ -1521,7 +1562,7 @@ static HRESULT natural(TS *t, HDC hdc, DWORD mode, LONG *width, LONG *height, LO
     layout(t, hdc, w);
     t->drawdc = 0;
     put_dc(t, hdc, host);
-    for (i = 0; i < t->nlines; i++) if (t->lines[i].width > maxw) maxw = t->lines[i].width;
+    for (i = 0; i < t->nlines; i++) if (t->lines[i].width + t->lines[i].pad > maxw) maxw = t->lines[i].width + t->lines[i].pad;
     *width = maxw + 1;                            /* (room for the caret) */
     *height = t->nlines * t->lineh;
     if (ascent) *ascent = t->ascent;
@@ -1581,7 +1622,7 @@ static HRESULT TXAPI ts_cached(ITextServices2 *me, DWORD *width, DWORD *height)
     LONG maxw = 0;
     int i;
     ensure_layout(t);
-    for (i = 0; i < t->nlines; i++) if (t->lines[i].width > maxw) maxw = t->lines[i].width;
+    for (i = 0; i < t->nlines; i++) if (t->lines[i].width + t->lines[i].pad > maxw) maxw = t->lines[i].width + t->lines[i].pad;
     if (width) *width = (DWORD)maxw;
     if (height) *height = (DWORD)(t->nlines * t->lineh);
     return S_OK;

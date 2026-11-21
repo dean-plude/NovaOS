@@ -10,10 +10,12 @@
  * gave the caret (insfmt) until the caret moves, as Rich Edit's does.
  *
  * Plain text (a TextBox's) has one format, the default, and a change to
- * the selection's format changes it.  The face and the size are the
- * default's everywhere: one line height (a later part lets them vary).
- * Bold and italic are fonts (GDI's, or the host's DirectWrite faces:
- * dwtext.c); underline and strikethrough are bars drawn under and through
+ * the selection's format changes it.  A rich text's characters can have a
+ * face and a size of their own (XAML text input, part 9): each distinct
+ * face, size, bold and italic is a font key (fmt_key; 0 the default's), a
+ * font of GDI's or the host's DirectWrite face (dwtext.c), and a line is
+ * as tall as its tallest font, its runs sharing one baseline (textserv.c's
+ * layout).  Underline and strikethrough are bars drawn under and through
  * the text.  Written from the Rich Edit documentation (CHARFORMAT2,
  * EM_SETCHARFORMAT, EM_GETCHARFORMAT).
  */
@@ -42,35 +44,39 @@ static int intern(TS *t, const RUNFMT *f)
 {
     int i;
     RUNFMT g;
-    memset(&g, 0, sizeof(g));                     /* (INDENTS' padding: compared whole) */
-    g.mask = f->mask;
-    g.effects = f->effects;
+    memset(&g, 0, sizeof(g));                     /* (padding and the face's tail: compared whole) */
+    g.mask = f->mask & FMT_MASK;
+    g.effects = f->effects & g.mask;
     g.color = f->color;
     g.align = f->align;
     g.ind.set = f->ind.set;
     memcpy(g.ind.v, f->ind.v, sizeof(g.ind.v));
-    g.mask &= FMT_MASK;
-    g.effects &= g.mask;
     if (!(g.mask & CFM_COLOR) || (g.effects & CFE_AUTOCOLOR)) g.color = 0;
+    if (g.mask & CFM_SIZE) g.size = f->size > 0 ? f->size : 1;
+    if (g.mask & CFM_FACE)
+        for (i = 0; i < 31 && f->face[i]; i++) g.face[i] = f->face[i];
     for (i = 0; i < 3; i++) if (!(g.ind.set & (1 << i))) g.ind.v[i] = 0;
     if (!g.mask && !g.align && !g.ind.set) return 0;
     if (!t->nfmts) t->nfmts = 1;                  /* (fmts[0]: the default) */
     for (i = 1; i < t->nfmts; i++)
-        if (t->fmts[i].mask == g.mask && t->fmts[i].effects == g.effects && t->fmts[i].color == g.color
-            && t->fmts[i].align == g.align && !memcmp(&t->fmts[i].ind, &g.ind, sizeof(g.ind))) return i;
+        if (!memcmp(&t->fmts[i], &g, sizeof(g))) return i;
     if (t->nfmts >= MAXFMT) return 0;
     t->fmts[t->nfmts] = g;
+    t->keyof[t->nfmts] = 0;
     return t->nfmts++;
 }
 
-/* format @idx with @mask's properties set to @effects and @color */
-static int merge(TS *t, int idx, DWORD mask, DWORD effects, COLORREF color)
+/* format @idx with @cf's properties (its dwMask's) set */
+static int merge_cf(TS *t, int idx, const CHARFORMATW *cf)
 {
     RUNFMT f = t->fmts[idx];
+    DWORD mask = cf->dwMask & FMT_MASK;
     if (!idx) memset(&f, 0, sizeof(f));
     f.mask |= mask;
-    f.effects = (f.effects & ~mask) | (effects & mask);
-    if (mask & CFM_COLOR) f.color = color;
+    f.effects = (f.effects & ~mask) | (cf->dwEffects & mask);
+    if (mask & CFM_COLOR) f.color = cf->crTextColor;
+    if (mask & CFM_SIZE) f.size = cf->yHeight;
+    if (mask & CFM_FACE) { memset(f.face, 0, sizeof(f.face)); memcpy(f.face, cf->szFaceName, 31 * sizeof(WCHAR)); }
     return intern(t, &f);
 }
 
@@ -107,41 +113,141 @@ COLORREF fmt_color(TS *t, int idx, COLORREF autocolor)
     return (default_effects(t) & CFE_AUTOCOLOR) ? autocolor : t->cf.cf.crTextColor;
 }
 
+LONG fmt_size(TS *t, int idx)
+{
+    const RUNFMT *f = &t->fmts[idx];
+    if (idx && idx < t->nfmts && (f->mask & CFM_SIZE)) return f->size;
+    return t->cf.cf.yHeight;
+}
+
+const WCHAR *fmt_face(TS *t, int idx)
+{
+    const RUNFMT *f = &t->fmts[idx];
+    if (idx && idx < t->nfmts && (f->mask & CFM_FACE) && f->face[0]) return f->face;
+    return t->cf.cf.szFaceName;
+}
+
+static BOOL same_face(const WCHAR *a, const WCHAR *b)
+{
+    int i;
+    for (i = 0; i < 32; i++) {
+        WCHAR x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 32;
+        if (y >= 'A' && y <= 'Z') y += 32;
+        if (x != y) return FALSE;
+        if (!x) return TRUE;
+    }
+    return TRUE;
+}
+
+/* the font a format's characters are drawn in: its key in the fonts in use
+ * (TS.fkeys), found or added; key 0 is the default format's own font (its
+ * weight may be other than bold's), and a format with the default's
+ * bold, italic, size and face has it.  When the table is full, the
+ * default's. */
 int fmt_key(TS *t, int idx)
 {
-    DWORD e = fmt_effects(t, idx);
-    return ((e & CFE_BOLD) ? 1 : 0) | ((e & CFE_ITALIC) ? 2 : 0);
+    DWORD e;
+    BYTE bi;
+    LONG size;
+    const WCHAR *face;
+    int k;
+    if (idx < 0 || idx >= MAXFMT) idx = 0;
+    if (t->keyof[idx]) return t->keyof[idx] - 1;
+    e = fmt_effects(t, idx);
+    bi = (BYTE)(((e & CFE_BOLD) ? 1 : 0) | ((e & CFE_ITALIC) ? 2 : 0));
+    size = fmt_size(t, idx);
+    face = fmt_face(t, idx);
+    if (!t->nfkeys) {                             /* (key 0: the default's) */
+        DWORD d = fmt_effects(t, 0);
+        memset(&t->fkeys[0], 0, sizeof(t->fkeys[0]));
+        t->fkeys[0].bi = (BYTE)(((d & CFE_BOLD) ? 1 : 0) | ((d & CFE_ITALIC) ? 2 : 0));
+        t->fkeys[0].size = t->cf.cf.yHeight;
+        memcpy(t->fkeys[0].face, t->cf.cf.szFaceName, 31 * sizeof(WCHAR));
+        t->nfkeys = 1;
+    }
+    for (k = 0; k < t->nfkeys; k++)
+        if (t->fkeys[k].bi == bi && t->fkeys[k].size == size && same_face(t->fkeys[k].face, face)) break;
+    if (k == t->nfkeys) {
+        if (k == MAXFONTS) k = 0;
+        else {
+            memset(&t->fkeys[k], 0, sizeof(t->fkeys[k]));
+            t->fkeys[k].bi = bi;
+            t->fkeys[k].size = size;
+            memcpy(t->fkeys[k].face, face, 31 * sizeof(WCHAR));
+            t->nfkeys++;
+        }
+    }
+    t->keyof[idx] = (BYTE)(k + 1);
+    return k;
+}
+
+/* a font key's height and ascent in pixels: the host's DirectWrite face's
+ * (dwtext.c), or GDI's font's on @dc (or a screen one), measured once */
+void fmt_metrics(TS *t, HDC dc, int key, LONG *h, LONG *asc)
+{
+    FONTKEY *k = &t->fkeys[key];
+    if (key <= 0 || key >= t->nfkeys) { *h = t->lineh > 0 ? t->lineh : 16; *asc = t->lineh > 0 ? t->ascent : 12; return; }
+    if (!k->h) {
+        if (!dw_metrics(t, key, &k->h, &k->asc)) {
+            TEXTMETRICW tm;
+            HDC own = 0;
+            HGDIOBJ old;
+            if (!dc) dc = own = CreateCompatibleDC(0);
+            old = SelectObject(dc, fmt_font(t, key));
+            memset(&tm, 0, sizeof(tm));
+            GetTextMetricsW(dc, &tm);
+            SelectObject(dc, old);
+            if (own) DeleteDC(own);
+            k->h = tm.tmHeight > 0 ? tm.tmHeight : 16;
+            k->asc = tm.tmAscent > 0 ? tm.tmAscent : 12;
+        }
+        if (k->h <= 0) k->h = 1;
+    }
+    *h = k->h;
+    *asc = k->asc;
 }
 
 /* ---- changing and reading formats --------------------------------------- */
 BOOL fmt_apply(TS *t, LONG a, LONG b, DWORD mask, DWORD effects, COLORREF color)
 {
+    CHARFORMATW cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = mask & ~(CFM_SIZE | CFM_FACE);
+    cf.dwEffects = effects;
+    cf.crTextColor = color;
+    return fmt_apply_cf(t, a, b, &cf);
+}
+
+BOOL fmt_apply_cf(TS *t, LONG a, LONG b, const CHARFORMATW *cf)
+{
     LONG i;
     int from = -1, to = 0;
-    mask &= FMT_MASK;
+    DWORD mask = cf->dwMask & FMT_MASK;
     if (!mask) return TRUE;
+    if ((mask & CFM_SIZE) && cf->yHeight <= 0) return FALSE;
     if (a > b) { LONG x = a; a = b; b = x; }
     if (a < 0) a = 0;
     if (b > t->len) b = t->len;
     if (!RICH(t)) {                               /* (plain text: the one format, the default) */
-        CHARFORMAT2W cf;
-        memset(&cf, 0, sizeof(cf));
-        cf.cf.cbSize = sizeof(cf);
-        cf.cf.dwMask = mask;
-        cf.cf.dwEffects = effects;
-        cf.cf.crTextColor = color;
-        set_default_format(t, &cf.cf);
+        CHARFORMAT2W d;
+        memset(&d, 0, sizeof(d));
+        memcpy(&d, cf, sizeof(CHARFORMATW));
+        d.cf.cbSize = sizeof(d);
+        d.cf.dwMask = mask;
+        set_default_format(t, &d.cf);
         return TRUE;
     }
     if (a == b) {                                 /* (the caret's: what typing there takes) */
-        t->insfmt = merge(t, fmt_insertion(t, a, b), mask, effects, color);
+        t->insfmt = merge_cf(t, fmt_insertion(t, a, b), cf);
         return TRUE;
     }
     if (!t->fmt) return FALSE;
     t->typing = FALSE;
     save_undo(t);
     for (i = a; i < b; i++) {
-        if (t->fmt[i] != from) { from = t->fmt[i]; to = merge(t, from, mask, effects, color); }
+        if (t->fmt[i] != from) { from = t->fmt[i]; to = merge_cf(t, from, cf); }
         t->fmt[i] = (BYTE)to;
     }
     t->dirty = TRUE;
@@ -164,6 +270,7 @@ void fmt_query(TS *t, LONG a, LONG b, CHARFORMAT2W *out)
     first = (a == b || !RICH(t)) ? fmt_insertion(t, a, b) : fmt_at(t, a);
     e = fmt_effects(t, first);
     c = fmt_color(t, first, 0);
+    same |= CFM_SIZE | CFM_FACE;
     if (RICH(t)) {
         int prev = first;
         for (i = a + 1; i < b && same; i++) {
@@ -174,9 +281,15 @@ void fmt_query(TS *t, LONG a, LONG b, CHARFORMAT2W *out)
             ek = fmt_effects(t, k);
             same &= ~((e ^ ek) & (CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE | CFE_STRIKEOUT));
             if (((e ^ ek) & CFE_AUTOCOLOR) || (!(e & CFE_AUTOCOLOR) && fmt_color(t, k, 0) != c)) same &= ~CFM_COLOR;
+            if (fmt_size(t, k) != fmt_size(t, first)) same &= ~CFM_SIZE;
+            if (!same_face(fmt_face(t, k), fmt_face(t, first))) same &= ~CFM_FACE;
         }
     }
-    out->cf.dwMask = same | CFM_FACE | CFM_SIZE;
+    out->cf.yHeight = fmt_size(t, first);
+    memcpy(out->cf.szFaceName, fmt_face(t, first), sizeof(out->cf.szFaceName));
+    out->cf.szFaceName[31] = 0;
+    if (!(same & CFM_FACE)) out->cf.szFaceName[0] = 0;
+    out->cf.dwMask = same;
     out->cf.dwEffects = (out->cf.dwEffects & ~(CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE | CFE_STRIKEOUT | CFE_AUTOCOLOR)) | (e & same);
     out->cf.crTextColor = (e & CFE_AUTOCOLOR) ? 0 : c;
     if (out->wWeight || (same & CFM_BOLD)) out->wWeight = (e & CFE_BOLD) ? 700 : 400;
@@ -419,47 +532,56 @@ BOOL para_apply_ind(TS *t, LONG a, LONG b, DWORD set, const LONG v[3])
 }
 
 /* ---- fonts and bars ------------------------------------------------------ */
-/* GDI's font of @key: the default's face and size, bold and italic as the
- * key says (t->font when the default's own) */
+/* GDI's font of @key: its face, size, bold and italic (t->font when the
+ * default's own) */
 HFONT fmt_font(TS *t, int key)
 {
     LOGFONTW lf;
-    if (key == fmt_key(t, 0) && t->font) return t->font;
+    const FONTKEY *k;
+    if (key <= 0 || key >= t->nfkeys) return t->font;
     if (t->fonts[key]) return t->fonts[key];
+    k = &t->fkeys[key];
     memset(&lf, 0, sizeof(lf));
-    lf.lfHeight = -(t->cf.cf.yHeight * 96 + 720) / 1440;   /* twips at 96 dpi */
-    lf.lfWeight = (key & 1) ? FW_BOLD : FW_NORMAL;
-    lf.lfItalic = (key & 2) != 0;
+    lf.lfHeight = -(k->size * 96 + 720) / 1440;   /* twips at 96 dpi */
+    if (!lf.lfHeight) lf.lfHeight = -1;
+    lf.lfWeight = (k->bi & 1) ? FW_BOLD : FW_NORMAL;
+    lf.lfItalic = (k->bi & 2) != 0;
     lf.lfCharSet = DEFAULT_CHARSET;
-    memcpy(lf.lfFaceName, t->cf.cf.szFaceName, sizeof(lf.lfFaceName));
+    memcpy(lf.lfFaceName, k->face, sizeof(lf.lfFaceName));
     lf.lfFaceName[31] = 0;
     t->fonts[key] = CreateFontIndirectW(&lf);
     return t->fonts[key] ? t->fonts[key] : t->font;
 }
 
+/* (after the default format changes: the fonts, their keys and metrics
+ * are found again) */
 void fmt_free_fonts(TS *t)
 {
     int i;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < MAXFONTS; i++) {
         if (t->fonts[i]) DeleteObject(t->fonts[i]);
         t->fonts[i] = 0;
     }
+    t->nfkeys = 0;
+    memset(t->keyof, 0, sizeof(t->keyof));
 }
 
-/* underline and strikethrough over [x0, x1) of the line at @y: @bar fills
- * each (left, top, right, bottom) */
-void fmt_decorate(TS *t, DWORD effects, LONG x0, LONG x1, LONG y, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx)
+/* underline and strikethrough over [x0, x1) of a run in font @key whose
+ * baseline is at @base: @bar fills each (left, top, right, bottom) */
+void fmt_decorate(TS *t, int key, DWORD effects, LONG x0, LONG x1, LONG base, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx)
 {
-    LONG th = (t->lineh + 12) / 24, u;
-    if (x1 <= x0) return;
+    LONG h, asc, th, u;
+    if (x1 <= x0 || !(effects & (CFE_UNDERLINE | CFE_STRIKEOUT))) return;
+    fmt_metrics(t, 0, key, &h, &asc);
+    th = (h + 12) / 24;
     if (th < 1) th = 1;
     if (effects & CFE_UNDERLINE) {
-        u = y + t->ascent + th;
-        if (u + th > y + t->lineh) u = y + t->lineh - th;
+        u = base + th;
+        if (u + th > base - asc + h) u = base - asc + h - th;
         bar(ctx, x0, u, x1, u + th);
     }
     if (effects & CFE_STRIKEOUT) {
-        u = y + t->ascent - t->ascent / 3;
+        u = base - asc / 3;
         bar(ctx, x0, u, x1, u + th);
     }
 }

@@ -249,10 +249,10 @@ static HRESULT point_of(TS *t, LONG cp, LONG type, LONG *x, LONG *y)
         LONG x2 = rc.left + x_of(t, cp + 1) - t->scrollx;
         pt.x = h == TA_RIGHT_ ? x2 : (pt.x + x2) / 2;
     }
-    top = rc.top + l * t->lineh - t->scrolly;
+    top = rc.top + t->lines[l].y - t->scrolly;
     switch (type & TA_BASELINE_) {
-    case TA_BOTTOM_: pt.y = top + t->lineh; break;
-    case TA_BASELINE_: pt.y = top + t->ascent; break;
+    case TA_BOTTOM_: pt.y = top + t->lines[l].h; break;
+    case TA_BASELINE_: pt.y = top + t->lines[l].asc; break;
     default: pt.y = top; break;
     }
     {

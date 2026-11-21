@@ -76,34 +76,68 @@ void dw_free(TS *t)
     int i;
     if (t->face) t->face->lpVtbl->Release(t->face);
     t->face = 0;
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < MAXFONTS; i++) {
         if (t->faces[i]) t->faces[i]->lpVtbl->Release(t->faces[i]);
         t->faces[i] = 0;
     }
 }
 
-/* the host's face of the default font in a weight and style */
-static IUnknown *host_face(TS *t, UINT32 weight, UINT32 style)
+/* the host's face of a font in a weight and style: @face's (a format's
+ * own), or the default font's (null) */
+static IUnknown *host_face(TS *t, const WCHAR *face, UINT32 weight, UINT32 style)
 {
     IProvideFontInfo_ *fi = t->fontinfo;
-    BSTR name;
+    BSTR name = 0;
     DWORD id;
     UINT32 runs = 0;
     if (!fi) return 0;
-    name = fi->lpVtbl->GetDefaultFont(fi);
-    id = fi->lpVtbl->GetRunFontFaceId(fi, name ? name : t->cf.cf.szFaceName, weight, 5, style, 0, L" ", 1, 0, &runs);
+    if (!face) name = fi->lpVtbl->GetDefaultFont(fi);
+    id = fi->lpVtbl->GetRunFontFaceId(fi, face ? face : name ? name : t->cf.cf.szFaceName, weight, 5, style, 0, L" ", 1, 0, &runs);
     if (name) SysFreeString(name);
     return id ? fi->lpVtbl->GetFontFace(fi, id) : 0;
 }
 
-/* the face of rich text's font @key (fmt_key: bold 1, italic 2): the
- * default's own, or the host's in that weight and style, asked once */
+/* the face of rich text's font @key (fmt_key): the default's own, or the
+ * host's of the key's face in its weight and style, asked once (the
+ * default font's name when the key's face is the default's) */
 IUnknown *dw_face(TS *t, int key)
 {
+    const FONTKEY *k;
     if (!t->face) return 0;
-    if (key == fmt_key(t, 0)) return t->face;
-    if (!t->faces[key]) t->faces[key] = host_face(t, (key & 1) ? 700 : 400, (key & 2) ? 2 : 0);
+    if (key <= 0 || key >= t->nfkeys) return t->face;
+    k = &t->fkeys[key];
+    if (!t->faces[key]) {
+        const WCHAR *own = k->face, *d = t->cf.cf.szFaceName;
+        int i;
+        for (i = 0; i < 32 && own[i] == d[i] && own[i]; i++) ;
+        t->faces[key] = host_face(t, (i < 32 && own[i] == d[i]) ? 0 : own, (k->bi & 1) ? 700 : 400, (k->bi & 2) ? 2 : 0);
+    }
     return t->faces[key] ? t->faces[key] : t->face;
+}
+
+/* a font key's size in pixels (its twips at 96 dpi) */
+float dw_emsize(TS *t, int key)
+{
+    if (key <= 0 || key >= t->nfkeys) return t->emsize;
+    return t->fkeys[key].size / 15.0f;
+}
+
+/* a font key's height and ascent from its face's metrics, when the host
+ * gives faces */
+BOOL dw_metrics(TS *t, int key, LONG *h, LONG *asc)
+{
+    DWFONTMETRICS_ m;
+    IUnknown *face = dw_face(t, key);
+    float du;
+    if (!face) return FALSE;
+    memset(&m, 0, sizeof(m));
+    ((DWGETMETRICS_)(*(void ***)face)[DW_GETMETRICS])(face, &m);
+    if (!m.designUnitsPerEm) return FALSE;
+    du = dw_emsize(t, key) / m.designUnitsPerEm;
+    *asc = (LONG)(m.ascent * du + 0.99f);
+    *h = (LONG)((m.ascent + m.descent + m.lineGap) * du + 0.99f);
+    if (*h <= 0) *h = 1;
+    return TRUE;
 }
 
 /* After the character format changes: the face the host gives its default
@@ -124,7 +158,7 @@ void dw_refresh(TS *t)
         }
     }
     if (!t->fontinfo) return;
-    if (!(t->face = host_face(t, (t->cf.cf.dwEffects & CFE_BOLD) ? 700 : t->cf.wWeight ? t->cf.wWeight : 400,
+    if (!(t->face = host_face(t, 0, (t->cf.cf.dwEffects & CFE_BOLD) ? 700 : t->cf.wWeight ? t->cf.wWeight : 400,
                               (t->cf.cf.dwEffects & CFE_ITALIC) ? 2 : 0))) return;
     memset(&m, 0, sizeof(m));
     ((DWGETMETRICS_)(*(void ***)t->face)[DW_GETMETRICS])(t->face, &m);
@@ -137,7 +171,7 @@ void dw_refresh(TS *t)
 }
 
 /* the glyphs of @n characters @s and their advances (in pixels) */
-static void glyphs(TS *t, IUnknown *face, const WCHAR *s, LONG n, UINT16 *ids, float *adv)
+static void glyphs(float emsize, IUnknown *face, const WCHAR *s, LONG n, UINT16 *ids, float *adv)
 {
     UINT32 stackcp[256], *cp = n > 256 ? alloc(n * sizeof(UINT32)) : stackcp;
     DWGLYPHMETRICS_ stackgm[256], *gm = n > 256 ? alloc(n * sizeof(DWGLYPHMETRICS_)) : stackgm;
@@ -147,7 +181,7 @@ static void glyphs(TS *t, IUnknown *face, const WCHAR *s, LONG n, UINT16 *ids, f
     float du;
     memset(&m, 0, sizeof(m));
     ((DWGETMETRICS_)vt[DW_GETMETRICS])(face, &m);
-    du = m.designUnitsPerEm ? t->emsize / m.designUnitsPerEm : 0;
+    du = m.designUnitsPerEm ? emsize / m.designUnitsPerEm : 0;
     for (i = 0; i < n; i++) cp[i] = s[i];
     memset(gm, 0, n * sizeof(*gm));
     if (FAILED(((DWGLYPHINDICES_)vt[DW_GETGLYPHINDICES])(face, cp, (UINT32)n, ids))) memset(ids, 0, n * sizeof(UINT16));
@@ -167,13 +201,17 @@ BOOL dw_measure(TS *t, int key, const WCHAR *s, LONG n, int *dx, SIZE *sz)
     if (!t->face) return FALSE;
     ids = n > 256 ? alloc(n * sizeof(UINT16)) : stackid;
     adv = n > 256 ? alloc(n * sizeof(float)) : stackadv;
-    glyphs(t, dw_face(t, key), s, n, ids, adv);
+    glyphs(dw_emsize(t, key), dw_face(t, key), s, n, ids, adv);
     for (i = 0; i < n; i++) {
         x += adv[i];
         if (dx) dx[i] = (int)(x + 0.5f);
     }
     sz->cx = (LONG)(x + 0.5f);
-    sz->cy = t->lineh;
+    {
+        LONG h, asc;
+        fmt_metrics(t, 0, key, &h, &asc);
+        sz->cy = h;
+    }
     if (ids != stackid) release(ids);
     if (adv != stackadv) release(adv);
     return TRUE;
@@ -200,7 +238,7 @@ static void fill(void *rt, LONG l, LONG tp, LONG r, LONG b, IUnknown *br)
 }
 
 /* glyphs [a, b) of a line's @ids and @adv, from x */
-static void run(TS *t, void *rt, IUnknown *face, float x, float baseline, const UINT16 *ids, const float *adv,
+static void run(float emsize, void *rt, IUnknown *face, float x, float baseline, const UINT16 *ids, const float *adv,
                 const DWGLYPHOFFSET_ *off, LONG a, LONG b, IUnknown *br)
 {
     DWGLYPHRUN_ g;
@@ -208,7 +246,7 @@ static void run(TS *t, void *rt, IUnknown *face, float x, float baseline, const 
     if (b <= a || !br) return;
     memset(&g, 0, sizeof(g));
     g.fontFace = face;
-    g.fontEmSize = t->emsize;
+    g.fontEmSize = emsize;
     g.glyphCount = (UINT32)(b - a);
     g.glyphIndices = ids + a;
     g.glyphAdvances = adv + a;
@@ -233,15 +271,18 @@ typedef struct { void *rt; IUnknown *br; } D2DBAR;
 static void d2d_bar(void *ctx, LONG l, LONG tp, LONG r, LONG b) { D2DBAR *d = ctx; fill(d->rt, l, tp, r, b, d->br); }
 
 /* characters [a, b) of a line (@s as shown, @dx measure()'s widths) from
- * x0, each run in its format's face, colour and bars; @autoc is the
- * automatic colour, or (@sel, over the highlight) all of them */
-static void runs(TS *t, void *rt, BRUSHES *bs, const WCHAR *s, const int *dx, LONG start, LONG a, LONG b, LONG x0, LONG y,
+ * x0 on the baseline @base, each run in its format's face, colour and
+ * bars; @autoc is the automatic colour, or (@sel, over the highlight) all
+ * of them */
+static void runs(TS *t, void *rt, BRUSHES *bs, const WCHAR *s, const int *dx, LONG start, LONG a, LONG b, LONG x0, LONG base,
                  COLORREF autoc, BOOL sel)
 {
     LONG i, j, k;
     for (i = a; i < b; i = j) {
         int f = fmt_at(t, start + i);
         IUnknown *face;
+        int key;
+        float em;
         UINT16 stackid[256], *ids;
         float stackadv[256], *adv;
         DWGLYPHOFFSET_ stackoff[256], *off;
@@ -249,20 +290,22 @@ static void runs(TS *t, void *rt, BRUSHES *bs, const WCHAR *s, const int *dx, LO
         D2DBAR bar;
         for (j = i + 1; j < b && fmt_at(t, start + j) == f; j++) ;
         n = j - i;
-        face = dw_face(t, fmt_key(t, f));
+        key = fmt_key(t, f);
+        face = dw_face(t, key);
+        em = dw_emsize(t, key);
         ids = n > 256 ? alloc(n * sizeof(UINT16)) : stackid;
         adv = n > 256 ? alloc(n * sizeof(float)) : stackadv;
         off = n > 256 ? alloc(n * sizeof(DWGLYPHOFFSET_)) : stackoff;
         bar.rt = rt;
         bar.br = brush_of(bs, sel ? autoc : fmt_color(t, f, autoc));
         if (ids && adv && off) {
-            glyphs(t, face, s + i, n, ids, adv);
+            glyphs(em, face, s + i, n, ids, adv);
             /* (the advances as measure() rounds them, so glyphs sit where the caret goes) */
             for (k = 0; k < n; k++) adv[k] = (float)(dx[i + k] - (i + k ? dx[i + k - 1] : 0));
             memset(off, 0, n * sizeof(DWGLYPHOFFSET_));
-            run(t, rt, face, (float)xa, (float)(y + t->ascent), ids, adv, off, 0, n, bar.br);
+            run(em, rt, face, (float)xa, (float)base, ids, adv, off, 0, n, bar.br);
         }
-        fmt_decorate(t, fmt_effects(t, f), xa, x0 + dx[j - 1], y, d2d_bar, &bar);
+        fmt_decorate(t, key, fmt_effects(t, f), xa, x0 + dx[j - 1], base, d2d_bar, &bar);
         if (ids != stackid) release(ids);
         if (adv != stackadv) release(adv);
         if (off != stackoff) release(off);
@@ -291,10 +334,10 @@ HRESULT dw_draw(TS *t, void *rt, const RECT *rc, BOOL opaque)
              brush_of(&bs, t->host ? HOST(t)->TxGetSysColor(t->host, COLOR_WINDOW) : GetSysColor(COLOR_WINDOW)));
     for (i = 0; i < t->nlines; i++) {
         LINE *ln = &t->lines[i];
-        LONG y = rc->top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc->left - t->scrollx + ln->shift;
+        LONG y = rc->top + ln->y - t->scrolly, n = ln->len, k, x0 = rc->left - t->scrollx + ln->shift;
         WCHAR *s;
         int *dx;
-        if (y + t->lineh <= rc->top || y >= rc->bottom) continue;
+        if (y + ln->h <= rc->top || y >= rc->bottom) continue;
         if (!n) {
             if (!(showsel && smin < smax && smax > ln->start && smin <= ln->start && i + 1 < t->nlines)) continue;
         }
@@ -307,14 +350,14 @@ HRESULT dw_draw(TS *t, void *rt, const RECT *rc, BOOL opaque)
         }
         if (n) {
             measure(t, 0, ln->start, n, dx, 0);
-            runs(t, rt, &bs, s, dx, ln->start, 0, n, x0, y, autoc, FALSE);
+            runs(t, rt, &bs, s, dx, ln->start, 0, n, x0, y + ln->asc, autoc, FALSE);
         }
         if (showsel && smin < smax && smax > ln->start && smin <= ln->start + n) {
             LONG a = smin > ln->start ? smin - ln->start : 0, b = smax < ln->start + n ? smax - ln->start : n;
             BOOL eol = smax > ln->start + n && i + 1 < t->nlines;   /* (the paragraph mark) */
-            LONG xa = x0 + (a ? dx[a - 1] : 0), xb = x0 + (b ? dx[b - 1] : 0) + (eol ? t->lineh / 3 : 0);
-            fill(rt, xa, y, xb, y + t->lineh, brush_of(&bs, selbgc));
-            runs(t, rt, &bs, s, dx, ln->start, a, b, x0, y, selfgc, TRUE);
+            LONG xa = x0 + (a ? dx[a - 1] : 0), xb = x0 + (b ? dx[b - 1] : 0) + (eol ? ln->h / 3 : 0);
+            fill(rt, xa, y, xb, y + ln->h, brush_of(&bs, selbgc));
+            runs(t, rt, &bs, s, dx, ln->start, a, b, x0, y + ln->asc, selfgc, TRUE);
         }
         release(s);
         release(dx);

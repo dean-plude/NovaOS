@@ -7,6 +7,8 @@
 # the context menu asked of the host's IRichEditOleCallback (right button, menu key);
 # paragraph alignment (EM_SETPARAFORMAT, Ctrl+E/R/L, TOM ITextPara, ITextParagraphFormat, SPF_SETDEFAULT);
 # paragraph indents (start, offset, right: EM_SETPARAFORMAT, TOM ITextPara, ITextParagraphFormat.SetIndents);
+# font sizes and faces per character with lines of different heights (EM_SETCHARFORMAT CFM_SIZE/CFM_FACE,
+# TOM ITextFont Set/GetSize and Name, ITextCharacterFormat.Size and Name);
 # 32-bit too, where the text services' methods are thiscall
 DOC = ('`textservtest` (the windowless Rich Edit XAML\'s text boxes host: `WinUIEdit.dll`\'s '
        '`CreateTextServices` and IIDs, typing, editing keys, selection, clipboard, undo and redo, '
@@ -29,6 +31,10 @@ DOC = ('`textservtest` (the windowless Rich Edit XAML\'s text boxes host: `WinUI
        '`TxGetParaFormat`); paragraph indents (`EM_SETPARAFORMAT`/`EM_GETPARAFORMAT` start, offset '
        'and right indents, placed and drawn by pixels, Enter keeping them, undo, hanging and right indents '
        'with word wrap, the TOM range\'s `ITextPara` indents and `ITextParagraphFormat.SetIndents`); '
+       'font sizes and faces per character (`EM_SETCHARFORMAT`/`EM_GETCHARFORMAT` `CFM_SIZE` and `CFM_FACE`, '
+       'a line as tall as its biggest text with the next line, the natural size, the caret and mouse hits '
+       'following, typing taking the size, undo, the TOM range\'s `ITextFont` `SetSize`, `GetSize`, `SetName` '
+       'and `GetName`, `ITextCharacterFormat.Size` and `Name`, plain text sized as one); '
        '`msftedit.dll` and `riched20.dll` too)')
 TESTS = [
     Test('textservtest', 'textservtest', [r'textservtest: \d+ passed, 0 failed'], timeout=120),

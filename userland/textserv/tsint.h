@@ -23,13 +23,22 @@ typedef struct { BYTE set; LONG v[3]; } INDENTS;
 typedef struct { WCHAR *text; BYTE *fmt; LONG len, anchor, active; int lastalign; INDENTS lastind; } SNAP;
 /* a character format of rich text (runs.c): the default's properties that
  * it sets (mask: CFM_BOLD, CFM_ITALIC, CFM_UNDERLINE, CFM_STRIKEOUT,
- * CFM_COLOR) and their values (CFE_ bits, the same as the CFM_ ones); on a
- * paragraph mark, also its paragraph's alignment (PFA_, 0: the default's)
- * and indents */
-typedef struct { DWORD mask, effects; COLORREF color; int align; INDENTS ind; } RUNFMT;
+ * CFM_COLOR, CFM_SIZE, CFM_FACE) and their values (CFE_ bits, the same as
+ * the CFM_ ones; the size in twips, the face's name); on a paragraph mark,
+ * also its paragraph's alignment (PFA_, 0: the default's) and indents */
+typedef struct { DWORD mask, effects; COLORREF color; LONG size; WCHAR face[32]; int align; INDENTS ind; } RUNFMT;
 #define MAXFMT 255
-#define FMT_MASK (CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_COLOR)
-typedef struct { LONG start, len, width, shift, pad; } LINE;  /* a laid-out line: [start, start+len), drawn @shift right (its indent and alignment); @pad: its indents' width */
+#define FMT_MASK (CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_COLOR | CFM_SIZE | CFM_FACE)
+/* a laid-out line: [start, start+len), drawn @shift right (its indent and
+ * alignment); @pad: its indents' width; @y its top from the text's, @h its
+ * height and @asc its baseline from its top: its tallest font's (XAML text
+ * input, part 9: fonts of their own sizes) */
+typedef struct { LONG start, len, width, shift, pad, y, h, asc; } LINE;
+/* a font rich text's formats use (runs.c): bold 1 and italic 2 (@bi), the
+ * size in twips and the face; @h and @asc its height and ascent in pixels
+ * once measured (0: not yet).  Font key 0 is always the default format's. */
+#define MAXFONTS 16
+typedef struct { BYTE bi; LONG size; WCHAR face[32]; LONG h, asc; } FONTKEY;
 
 typedef struct TS {
     IUnknown inner;                               /* the object's own IUnknown (aggregation) */
@@ -81,8 +90,12 @@ typedef struct TS {
     int nfmts;
     int insfmt;                                   /* the format typing at the caret takes, or -1 */
     DWORD accels;                                 /* the formatting keys allowed (EM_SETFORMATACCELERATORS) */
-    HFONT fonts[4];                               /* GDI's fonts by key (bold 1, italic 2) */
-    IUnknown *faces[4];                           /* DirectWrite's faces by key */
+    FONTKEY fkeys[MAXFONTS];                      /* the fonts in use, by key (XAML text input, part 9) */
+    int nfkeys;
+    BYTE keyof[MAXFMT];                           /* each format's font key + 1 (0: not yet found) */
+    HFONT fonts[MAXFONTS];                        /* GDI's fonts by key */
+    IUnknown *faces[MAXFONTS];                    /* DirectWrite's faces by key */
+    LONG careth;                                  /* the caret's height as made */
     /* the context menu (XAML text input, part 6) */
     IRichEditOleCallback_ *olecb;                 /* EM_SETOLECALLBACK's, held */
     DWORD touchopts;                              /* EM_SETTOUCHOPTIONS' (RTO_DISABLECONTEXTMENU) */
@@ -143,6 +156,8 @@ void dw_free(TS *t);
 BOOL dw_measure(TS *t, int key, const WCHAR *s, LONG n, int *dx, SIZE *sz);
 HRESULT dw_draw(TS *t, void *rt, const RECT *rc, BOOL opaque);
 IUnknown *dw_face(TS *t, int key);                /* the face of a font key (fmt_key), or null */
+BOOL dw_metrics(TS *t, int key, LONG *h, LONG *asc);   /* its height and ascent, when the host's faces are used */
+float dw_emsize(TS *t, int key);                  /* its size in pixels */
 
 /* tom.c */
 void tom_init(TS *t);
@@ -154,6 +169,7 @@ void tom_clamp(TS *t);                            /* the text was replaced */
 /* winrtdoc.c */
 void *wdoc_qi(TS *t, REFIID iid);                 /* the Windows Runtime document, or null */
 HRESULT make_hstring(const WCHAR *s, UINT32 n, HSTRING *out);
+BSTR hstring_bstr(HSTRING h);                     /* (for TOM) */
 
 /* winrtfmt.c */
 HRESULT wfmt_wrap(void *tomfont, void **out);     /* Microsoft.UI.Text's ITextCharacterFormat over a TOM font */
@@ -173,10 +189,14 @@ HRESULT tom_set_para(ITextRange2 *range, void *para);            /* ITextRange::
 BOOL fmt_reserve(TS *t, LONG cap);                /* the formats' room, as the text's */
 int fmt_at(TS *t, LONG cp);
 int fmt_insertion(TS *t, LONG a, LONG b);         /* what text put in place of [a, b) takes */
-int fmt_key(TS *t, int idx);                      /* its font: bold 1, italic 2 */
+int fmt_key(TS *t, int idx);                      /* its font's key (TS.fkeys; 0: the default's) */
+LONG fmt_size(TS *t, int idx);                    /* its size in twips, the default's under it */
+const WCHAR *fmt_face(TS *t, int idx);            /* its face's name, the default's under it */
+void fmt_metrics(TS *t, HDC dc, int key, LONG *h, LONG *asc);   /* a font key's height and ascent in pixels */
 DWORD fmt_effects(TS *t, int idx);                /* its CFE_ bits, the default's under it */
 COLORREF fmt_color(TS *t, int idx, COLORREF autocolor);
 BOOL fmt_apply(TS *t, LONG a, LONG b, DWORD mask, DWORD effects, COLORREF color);
+BOOL fmt_apply_cf(TS *t, LONG a, LONG b, const CHARFORMATW *cf);   /* (the size and face too: cf's dwMask) */
 void fmt_query(TS *t, LONG a, LONG b, CHARFORMAT2W *out);   /* dwMask: what is the same over [a, b) */
 BOOL fmt_toggle(TS *t, DWORD effect);             /* Ctrl+B, Ctrl+I, Ctrl+U */
 HFONT fmt_font(TS *t, int key);
@@ -194,4 +214,6 @@ void para_indents(TS *t, LONG cp, LONG v[3]);     /* those of the paragraph hold
 DWORD para_query_ind(TS *t, LONG a, LONG b, LONG v[3]);   /* those of the paragraphs [a, b) touches: IND_ bits of those the same */
 BOOL para_apply_ind(TS *t, LONG a, LONG b, DWORD set, const LONG v[3]);   /* set those @set (IND_ bits) names */
 void para_px(TS *t, LONG cp, LONG *first, LONG *rest, LONG *right);   /* (layout's: in pixels, never negative) */                         /* the host's default paragraph format (TxGetParaFormat) */
-void fmt_decorate(TS *t, DWORD effects, LONG x0, LONG x1, LONG y, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx);
+/* underline and strikethrough of a run in font @key on the baseline @base */
+void fmt_decorate(TS *t, int key, DWORD effects, LONG x0, LONG x1, LONG base, void (*bar)(void *, LONG, LONG, LONG, LONG), void *ctx);
+int line_at_y(TS *t, LONG y);                     /* (textserv.c) the line at @y from the text's top */

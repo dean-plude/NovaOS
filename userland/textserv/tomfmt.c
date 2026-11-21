@@ -127,20 +127,36 @@ static HRESULT values(FMT *f, CHARFORMAT2W *cf)
     return S_OK;
 }
 
-/* sets @mask's properties to @effects and @color */
-static HRESULT put(FMT *f, DWORD mask, DWORD effects, COLORREF color)
+/* sets @cf's properties (its dwMask's: the effects, the colour, the size
+ * and the face) */
+static HRESULT put_cf(FMT *f, const CHARFORMATW *cf)
 {
     LONG a, b;
     TS *t;
+    DWORD mask = cf->dwMask & FMT_MASK;
     if (!f->range) {
         f->cf.cf.dwMask |= mask;
-        f->cf.cf.dwEffects = (f->cf.cf.dwEffects & ~mask) | (effects & mask);
-        if (mask & CFM_COLOR) f->cf.cf.crTextColor = color;
+        f->cf.cf.dwEffects = (f->cf.cf.dwEffects & ~mask) | (cf->dwEffects & mask);
+        if (mask & CFM_COLOR) f->cf.cf.crTextColor = cf->crTextColor;
+        if (mask & CFM_SIZE) f->cf.cf.yHeight = cf->yHeight;
+        if (mask & CFM_FACE) memcpy(f->cf.cf.szFaceName, cf->szFaceName, sizeof(cf->szFaceName));
         return S_OK;
     }
     if (!(t = range_of(f, &a, &b))) return CO_E_RELEASED_;
     if (t->bits & TXTBIT_READONLY) return E_ACCESSDENIED;
-    return fmt_apply(t, a, b, mask, effects, color) ? S_OK : E_OUTOFMEMORY;
+    return fmt_apply_cf(t, a, b, cf) ? S_OK : E_INVALIDARG;
+}
+
+/* sets @mask's properties to @effects and @color */
+static HRESULT put(FMT *f, DWORD mask, DWORD effects, COLORREF color)
+{
+    CHARFORMATW cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = mask & ~(CFM_SIZE | CFM_FACE);
+    cf.dwEffects = effects;
+    cf.crTextColor = color;
+    return put_cf(f, &cf);
 }
 
 /* an on-or-off property (bold, italic, strikethrough, underline) */
@@ -190,7 +206,9 @@ static HRESULT STDMETHODCALLTYPE fo_setforecolor(FMT *f, LONG v)
     return put(f, CFM_COLOR, 0, (COLORREF)v & 0xffffff);
 }
 
-/* the default's name and size; the weight is bold's */
+/* the name and the size (XAML text input, part 9: each character's own,
+ * an empty name and tomUndefined when the range's differ); the weight is
+ * bold's */
 static HRESULT STDMETHODCALLTYPE fo_getname(FMT *f, BSTR *v)
 {
     CHARFORMAT2W cf;
@@ -198,8 +216,20 @@ static HRESULT STDMETHODCALLTYPE fo_getname(FMT *f, BSTR *v)
     if (!v) return E_INVALIDARG;
     *v = 0;
     if (FAILED(hr = values(f, &cf))) return hr;
-    *v = SysAllocString(cf.cf.szFaceName);
+    cf.cf.szFaceName[31] = 0;
+    *v = SysAllocString((cf.cf.dwMask & CFM_FACE) ? cf.cf.szFaceName : L"");
     return *v ? S_OK : E_OUTOFMEMORY;
+}
+static HRESULT STDMETHODCALLTYPE fo_setname(FMT *f, BSTR v)
+{
+    CHARFORMATW cf;
+    UINT i;
+    if (!v || !v[0]) return E_INVALIDARG;
+    memset(&cf, 0, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_FACE;
+    for (i = 0; i < 31 && v[i]; i++) cf.szFaceName[i] = v[i];
+    return put_cf(f, &cf);
 }
 static HRESULT STDMETHODCALLTYPE fo_getsize(FMT *f, float *v)
 {
@@ -207,8 +237,19 @@ static HRESULT STDMETHODCALLTYPE fo_getsize(FMT *f, float *v)
     HRESULT hr;
     if (!v) return E_INVALIDARG;
     if (FAILED(hr = values(f, &cf))) return hr;
-    *v = cf.cf.yHeight / 20.0f;                   /* (twips: points) */
+    *v = (cf.cf.dwMask & CFM_SIZE) ? cf.cf.yHeight / 20.0f : (float)tomUndefined;   /* (twips: points) */
     return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE fo_setsize(FMT *f, float v)
+{
+    CHARFORMATW cf;
+    if (v == (float)tomUndefined) return S_OK;
+    if (!(v > 0) || v > 1638.0f) return E_INVALIDARG;   /* (Rich Edit's largest: 1638 points) */
+    memset(&cf, 0, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_SIZE;
+    cf.yHeight = (LONG)(v * 20.0f + 0.5f);
+    return put_cf(f, &cf);
 }
 static HRESULT STDMETHODCALLTYPE fo_getweight(FMT *f, LONG *v)
 {
@@ -245,7 +286,8 @@ static HRESULT STDMETHODCALLTYPE fo_setdup(FMT *f, FMT *from)
     HRESULT hr;
     if (!from || !ours(from)) return E_INVALIDARG;
     if (FAILED(hr = values(from, &cf))) return hr;
-    return put(f, cf.cf.dwMask & FMT_MASK, cf.cf.dwEffects, cf.cf.crTextColor);
+    cf.cf.dwMask &= FMT_MASK;
+    return put_cf(f, &cf.cf);
 }
 static HRESULT STDMETHODCALLTYPE fo_canchange(FMT *f, LONG *v)
 {
@@ -253,6 +295,12 @@ static HRESULT STDMETHODCALLTYPE fo_canchange(FMT *f, LONG *v)
     TS *t = f->range ? range_of(f, &a, &b) : 0;
     if (v) *v = (t && (t->bits & TXTBIT_READONLY)) ? tomFalse_ : tomTrue;
     return (t && (t->bits & TXTBIT_READONLY)) ? S_FALSE : S_OK;
+}
+static BOOL same_name(const WCHAR *a, const WCHAR *b)
+{
+    int i;
+    for (i = 0; i < 32 && a[i] == b[i]; i++) if (!a[i]) return TRUE;
+    return i == 32;
 }
 static HRESULT STDMETHODCALLTYPE fo_isequal(FMT *f, FMT *other, LONG *v)
 {
@@ -263,7 +311,9 @@ static HRESULT STDMETHODCALLTYPE fo_isequal(FMT *f, FMT *other, LONG *v)
     if (FAILED(values(f, &x)) || FAILED(values(other, &y))) return S_FALSE;
     same = (x.cf.dwMask & FMT_MASK) == (y.cf.dwMask & FMT_MASK)
         && !((x.cf.dwEffects ^ y.cf.dwEffects) & x.cf.dwMask & (CFE_BOLD | CFE_ITALIC | CFE_UNDERLINE | CFE_STRIKEOUT | CFE_AUTOCOLOR))
-        && (!(x.cf.dwMask & CFM_COLOR) || (x.cf.dwEffects & CFE_AUTOCOLOR) || x.cf.crTextColor == y.cf.crTextColor);
+        && (!(x.cf.dwMask & CFM_COLOR) || (x.cf.dwEffects & CFE_AUTOCOLOR) || x.cf.crTextColor == y.cf.crTextColor)
+        && (!(x.cf.dwMask & CFM_SIZE) || x.cf.yHeight == y.cf.yHeight)
+        && (!(x.cf.dwMask & CFM_FACE) || same_name(x.cf.szFaceName, y.cf.szFaceName));
     if (v) *v = same ? tomTrue : tomFalse_;
     return same ? S_OK : S_FALSE;
 }
@@ -481,9 +531,9 @@ static const void *const font_vtbl[] = {
     fo_getforecolor, fo_setforecolor, n1, n1,     /* Get/SetForeColor, Get/SetHidden */
     n1, n1, fo_getitalic, fo_setitalic,           /* Get/SetEngrave, Get/SetItalic */
     n1, n1, n1, n1,                               /* Get/SetKerning, Get/SetLanguageID */
-    fo_getname, n1, n1, n1,                       /* Get/SetName, Get/SetOutline */
+    fo_getname, fo_setname, n1, n1,               /* Get/SetName, Get/SetOutline */
     n1, n1, n1, n1, n1, n1,                       /* Get/SetPosition, Get/SetProtected, Get/SetShadow */
-    fo_getsize, n1, n1, n1, n1, n1,               /* Get/SetSize, Get/SetSmallCaps, Get/SetSpacing */
+    fo_getsize, fo_setsize, n1, n1, n1, n1,       /* Get/SetSize, Get/SetSmallCaps, Get/SetSpacing */
     fo_getstrike, fo_setstrike, n1, n1, n1, n1,   /* Get/SetStrikeThrough, Get/SetSubscript, Get/SetSuperscript */
     fo_getunderline, fo_setunderline, fo_getweight, fo_setweight,   /* Get/SetUnderline, Get/SetWeight */
     /* ITextFont2 */

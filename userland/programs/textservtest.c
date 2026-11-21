@@ -1323,6 +1323,7 @@ static void alignment(HDC dc)
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_PARAFORMATCHANGE, TXTBIT_PARAFORMATCHANGE);
     host.pf.dwMask = 0;
     msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.client.bottom = BH;
     host.bits = bits;
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
 }
@@ -1514,6 +1515,7 @@ static void fonts(HDC dc)
     HSTRING hs = 0;
     int dark;
 
+    host.client.bottom = 100;                     /* (room for both lines: no scrolling) */
     host.bits |= TXTBIT_RICHTEXT | TXTBIT_MULTILINE;
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
     msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
@@ -1536,6 +1538,7 @@ static void fonts(HDC dc)
     y2 = y_at(3);
     check("the first line is as tall as its bigger font: the second moves down", y2 >= 2 * y1 - 4 && y2 <= 2 * y1 + 6);
     ts->lpVtbl->TxGetNaturalSize(ts, DVASPECT_CONTENT, 0, 0, 0, TXTNS_FITTOCONTENT, 0, &w, &h2);
+    if (h2 != y2 + y1) printf("  natural height %ld\n", (long)h2);
     check("TxGetNaturalSize: the lines' heights added up", h2 == y2 + y1);
     set_sel(0, 0);
     draw(dc);
@@ -1545,6 +1548,7 @@ static void fonts(HDC dc)
     bigh = host.careth;
     set_sel(4, 4);
     smallh = host.careth;
+    if (bigh != y2 || smallh != y1 || host.caret.y != y2) printf("  carets %ld %ld at %ld\n", (long)bigh, (long)smallh, (long)host.caret.y);
     check("the caret is as tall as its line", bigh == y2 && smallh == y1 && host.caret.y == y2);
     msg(WM_KILLFOCUS, 0, 0);
     check("EM_CHARFROMPOS in the second line, below the first's height", msg(EM_CHARFROMPOS, 0, (LPARAM)&(POINTL){1, y2 + 2}) == 3);
@@ -1617,6 +1621,7 @@ static void fonts(HDC dc)
     set_font(0, 1, CFM_SIZE, 180, 0);
     check("... and back", y_at(3) == y1);
     msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.client.bottom = BH;
     host.bits = bits;
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
 }

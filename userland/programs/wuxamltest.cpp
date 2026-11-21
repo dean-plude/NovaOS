@@ -910,6 +910,29 @@ static void items_stack_panel_checks()
           SUCCEEDED(panel->get_CacheLength(&cacheLength)) && cacheLength == 2.0);
 }
 
+/* a HyperlinkButton from markup, as Calculator's page shows its links:
+ * Windows' HyperlinkButton (a ButtonBase), its Content and NavigateUri
+ * read back */
+static void hyperlink_button_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> buttonObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<HyperlinkButton " XMLNS L"Content='Privacy' "
+                                                    L"NavigateUri='https://example.com/privacy'/>").Get(),
+                     buttonObject.GetAddressOf()) : E_FAIL;
+    CHECK("a HyperlinkButton from markup", SUCCEEDED(hr) && buttonObject);
+    ctl::ComPtr<wuxc::IHyperlinkButton> button;
+    ctl::ComPtr<wuxc::Primitives::IButtonBase> buttonBase;
+    ctl::ComPtr<ABI::Windows::Foundation::IUriRuntimeClass> uri;
+    HSTRING host = nullptr;
+    CHECK("it is Windows' HyperlinkButton (a ButtonBase), its NavigateUri's host example.com", buttonObject &&
+          SUCCEEDED(buttonObject.As(&button)) && SUCCEEDED(buttonObject.As(&buttonBase)) &&
+          SUCCEEDED(button->get_NavigateUri(uri.GetAddressOf())) && uri && SUCCEEDED(uri->get_Host(&host)) &&
+          wcscmp(WindowsGetStringRawBuffer(host, nullptr), L"example.com") == 0);
+    WindowsDeleteString(host);
+}
+
 /* a LinearGradientBrush from markup, as Calculator's page paints with: its
  * EndPoint and its two GradientStops (their Offset and Color) read back */
 static void gradient_checks()
@@ -1015,6 +1038,7 @@ public:
         list_view_checks();
         gradient_checks();
         items_stack_panel_checks();
+        hyperlink_button_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

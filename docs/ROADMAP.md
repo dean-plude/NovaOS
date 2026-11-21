@@ -1725,6 +1725,17 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   core's text element collection (`CTextElementCollection`), which NovaOS
   does not build yet.  Next: the text element collection, then the CI
   check that Calculator computes `2 + 2`, which ticks this step.
+  Thirty-seventh part done (Pulsar item 3, thirty-first slice): the
+  core's text element collection (`CTextElementCollection`, under a
+  text block's, a `Span`'s and a `Hyperlink`'s inlines), the text element
+  every inline is made over (`CTextElement`) and the text schema that
+  says which elements each may hold (`CTextSchema`), built for the
+  formatted text in Calculator's page.  Test `wuxamltest`.  Calculator's
+  page now loads and reaches its first layout pass, where a WinUI 2
+  control's measure calls its `Windows.UI.Xaml` base class's
+  `MeasureOverride` and gets "not implemented".  Next: that base class
+  measure, then the CI check that Calculator computes `2 + 2`, which
+  ticks this step.
 
 ---
 

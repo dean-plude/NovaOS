@@ -1852,6 +1852,16 @@ CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
 CORE_SOURCES[_CORETEXT] += ('TextBlock/Hyperlink.cpp',)
 # (whose launch names IAsyncInfo bare, as the Windows SDK lets it)
 FILE_FIRST['Launcher.cpp'] = ('nova_async_info.h',)
+# (step 32.6, a line of formatted text's pieces, Calculator's (Pulsar item
+# 3, slice 31): the list that holds a Span's, a Hyperlink's or a
+# Paragraph's inlines, CTextElementCollection, the base of
+# CInlineCollection, which checks each element it takes and marks its
+# owner's text dirty, and the text element itself, CTextElement, the base
+# of every inline, whose inherited formatting, dirty marking and access
+# keys the collection and the inlines call, and the text schema, which
+# says which elements a text block, a span or a link may hold)
+CORE_SOURCES[_CORETEXT] += ('RichTextArea/TextElementCollection.cpp', 'RichTextArea/TextElement.cpp',
+                         'RichTextArea/TextSchema.cpp')
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

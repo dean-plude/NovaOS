@@ -933,6 +933,24 @@ static void hyperlink_button_checks()
     WindowsDeleteString(host);
 }
 
+/* a TextBlock from markup whose text is a Span holding a Run and a
+ * Hyperlink (holding a Run), as Calculator's page words its links: the
+ * core's text element collections (the block's and the Span's inlines)
+ * take each element as the text schema allows it */
+static void text_elements_checks()
+{
+    ctl::ComPtr<wux::Markup::IXamlReaderStatics> reader;
+    ctl::ComPtr<IInspectable> blockObject;
+    HRESULT hr = SUCCEEDED(statics(L"Windows.UI.Xaml.Markup.XamlReader", reader.GetAddressOf())) ?
+        reader->Load(wrl_wrappers::HStringReference(L"<TextBlock " XMLNS L"><Span><Run Text='Read the '/>"
+                                                    L"<Hyperlink NavigateUri='https://example.com/terms'>"
+                                                    L"<Run Text='terms'/></Hyperlink></Span></TextBlock>").Get(),
+                     blockObject.GetAddressOf()) : E_FAIL;
+    ctl::ComPtr<wuxc::ITextBlock> block;
+    CHECK("a TextBlock with a Span of a Run and a Hyperlink from markup", SUCCEEDED(hr) && blockObject &&
+          SUCCEEDED(blockObject.As(&block)));
+}
+
 /* a LinearGradientBrush from markup, as Calculator's page paints with: its
  * EndPoint and its two GradientStops (their Offset and Color) read back */
 static void gradient_checks()
@@ -1039,6 +1057,7 @@ public:
         gradient_checks();
         items_stack_panel_checks();
         hyperlink_button_checks();
+        text_elements_checks();
         binding_connector_checks();
         layout_bounds_checks();
         window_activated_checks();

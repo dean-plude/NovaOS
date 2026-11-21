@@ -2103,5 +2103,25 @@ vendors.
    (a `TextBlock` from markup whose `Span` holds a `Run` and a
    `Hyperlink`).
 
+   Pulsar item 3, thirty-second slice: the first layout pass.  The
+   "not implemented" above was not the faces' (WinUI 2's
+   `NavigationView`, at `Microsoft.UI.Xaml.dll` rva 0x37b27, asks its
+   `ContentControl` inner for Windows' `IFrameworkElementOverrides` and
+   the forward face calls the framework's `MeasureOverride` as it
+   should): it came from below, a `TextBlock` in the navigation view's
+   content whose `Text` replaces its inlines and first clears its
+   selection, `TextSelectionManager::Destroy`, an unbuilt stand-in
+   answering `E_NOTIMPL` (it said so once in the log, well before the
+   failure).  Vendored and built from microsoft-ui-xaml 866ba81 into the
+   core's text library: `core/text/common/TextSelectionManager.cpp` (the
+   selection, its highlight, grippers and clipboard copy; with
+   `windows.applicationmodel.datatransfer.h` forced first, for its
+   `DataPackage`) and the header `core/inc/TextNavigationHelper.h`.  Its
+   `GetDefaultSelectionHighlightColor` (the system's accent colour)
+   replaces NovaOS's stand-in in `src/text_controls.cpp`.  Calculator's
+   first layout pass now runs on until it stops at an unbuilt brush
+   transition, `CBrushTransition::GetDuration`.  Test: `wuxamltest` (that
+   `TextBlock`'s `Text` set over its inlines and read back).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

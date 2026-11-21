@@ -1862,6 +1862,15 @@ FILE_FIRST['Launcher.cpp'] = ('nova_async_info.h',)
 # says which elements a text block, a span or a link may hold)
 CORE_SOURCES[_CORETEXT] += ('RichTextArea/TextElementCollection.cpp', 'RichTextArea/TextElement.cpp',
                          'RichTextArea/TextSchema.cpp')
+# (step 32.6, a text block's first layout, Calculator's (Pulsar item 3,
+# slice 32): a text block whose inlines are rebuilt from its Text clears
+# its selection first, TextSelectionManager::Destroy, which answers S_OK
+# when the block has no selection; unbuilt, its E_NOTIMPL failed the
+# block's measure and with it the page's first layout pass (WinUI 2's
+# NavigationView, calling its Windows ContentControl base's MeasureOverride)
+CORE_SOURCES[_CORETEXT] += ('common/TextSelectionManager.cpp',)
+# (whose copy puts the selected text on the clipboard, Windows' DataPackage)
+FILE_FIRST['TextSelectionManager.cpp'] = ('windows.applicationmodel.datatransfer.h',)
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

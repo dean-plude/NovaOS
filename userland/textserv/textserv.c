@@ -239,7 +239,42 @@ static void add_line(TS *t, LONG start, LONG len, LONG width)
     t->lines[t->nlines].width = width;
     t->lines[t->nlines].shift = 0;
     t->lines[t->nlines].pad = 0;
+    t->lines[t->nlines].y = t->lines[t->nlines].h = t->lines[t->nlines].asc = 0;
     t->nlines++;
+}
+
+/* a line's height and baseline: its tallest font's ascent over its
+ * deepest's descent, its characters' and (the paragraph's last line) its
+ * mark's; an empty final paragraph's from the mark before it (rich text:
+ * plain text's lines are all the default font's) */
+static void line_metrics(TS *t, HDC dc, LINE *ln)
+{
+    LONG i, end = ln->start + ln->len, asc = 0, desc = 0, h, a;
+    int prev = -1;
+    if (!RICH(t)) { ln->h = t->lineh; ln->asc = t->ascent; return; }
+    if (end < t->len && t->text[end] == L'\r') end++;
+    i = ln->start;
+    if (i == end && i > 0) i--;                   /* (the empty final paragraph) */
+    if (i == end) { ln->h = t->lineh; ln->asc = t->ascent; return; }
+    for (; i < end; i++) {
+        int k = fmt_key(t, fmt_at(t, i));
+        if (k == prev) continue;
+        prev = k;
+        fmt_metrics(t, dc, k, &h, &a);
+        if (a > asc) asc = a;
+        if (h - a > desc) desc = h - a;
+    }
+    ln->asc = asc;
+    ln->h = asc + desc > 0 ? asc + desc : 1;
+}
+
+/* the line at @y from the text's top (the first above it, the last below) */
+int line_at_y(TS *t, LONG y)
+{
+    int i;
+    for (i = 0; i + 1 < t->nlines; i++)
+        if (y < t->lines[i].y + t->lines[i].h) return i;
+    return t->nlines > 0 ? t->nlines - 1 : 0;
 }
 
 /* Breaks the text into lines: at each '\r', and (word wrap) where a line
@@ -299,6 +334,15 @@ static void layout(TS *t, HDC dc, LONG width)
         }
         if (e >= t->len) break;
         p = e + 1;
+    }
+    {   /* (each line's height, baseline and top) */
+        LONG y = 0;
+        int i;
+        for (i = 0; i < t->nlines; i++) {
+            line_metrics(t, dc, &t->lines[i]);
+            t->lines[i].y = y;
+            y += t->lines[i].h;
+        }
     }
     t->alignw = width;
     SelectObject(dc, old);
@@ -404,9 +448,7 @@ LONG hit(TS *t, LONG x, LONG y)
     int l;
     ensure_layout(t);
     client_rect(t, &rc);
-    l = (y - rc.top + t->scrolly) / (t->lineh ? t->lineh : 16);
-    if (l < 0) l = 0;
-    if (l >= t->nlines) l = t->nlines - 1;
+    l = line_at_y(t, y - rc.top + t->scrolly);
     return cp_at_x(t, l, x - rc.left + t->scrollx);
 }
 
@@ -417,25 +459,26 @@ static void caret_point(TS *t, POINT *pt)
     ensure_layout(t);
     client_rect(t, &rc);
     pt->x = rc.left + x_of(t, t->active) - t->scrollx;
-    pt->y = rc.top + line_of(t, t->active) * t->lineh - t->scrolly;
+    pt->y = rc.top + t->lines[line_of(t, t->active)].y - t->scrolly;
 }
 
 /* scrolls so character position @cp is inside the client area */
 void scroll_to(TS *t, LONG cp)
 {
     RECT rc;
-    LONG x, y, w, h;
+    LONG x, y, w, h, lh;
     ensure_layout(t);
     client_rect(t, &rc);
     w = rc.right - rc.left;
     h = rc.bottom - rc.top;
     x = x_of(t, cp);
-    y = line_of(t, cp) * t->lineh;
+    y = t->lines[line_of(t, cp)].y;
+    lh = t->lines[line_of(t, cp)].h;
     if (!(t->bits & TXTBIT_MULTILINE) || !(t->bits & TXTBIT_WORDWRAP)) {
         if (x - t->scrollx > w - 1) t->scrollx = x - w + 1;
         if (x < t->scrollx) t->scrollx = x;
     } else t->scrollx = 0;
-    if (y + t->lineh - t->scrolly > h) t->scrolly = y + t->lineh - h;
+    if (y + lh - t->scrolly > h) t->scrolly = y + lh - h;
     if (y < t->scrolly) t->scrolly = y;
     if (t->scrollx < 0) t->scrollx = 0;
     if (t->scrolly < 0) t->scrolly = 0;
@@ -446,11 +489,14 @@ static void scroll_to_caret(TS *t) { scroll_to(t, t->active); }
 static void update_caret(TS *t)
 {
     POINT pt;
+    LONG h;
     if (!t->host || !t->focus) return;
     caret_point(t, &pt);
-    if (!t->caret) {
-        HOST(t)->TxCreateCaret(t->host, 0, 1, t->lineh);
+    h = t->lines[line_of(t, t->active)].h;       /* (as tall as its line) */
+    if (!t->caret || h != t->careth) {
+        HOST(t)->TxCreateCaret(t->host, 0, 1, h);
         t->caret = TRUE;
+        t->careth = h;
     }
     HOST(t)->TxSetCaretPos(t->host, pt.x, pt.y);
     HOST(t)->TxShowCaret(t->host, TRUE);
@@ -1187,7 +1233,7 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         ensure_layout(t);
         client_rect(t, &rc);
         pt->x = rc.left + x_of(t, cp) - t->scrollx;
-        pt->y = rc.top + line_of(t, cp) * t->lineh - t->scrolly;
+        pt->y = rc.top + t->lines[line_of(t, cp)].y - t->scrolly;
         break;
     }
     case EM_CHARFROMPOS:
@@ -1200,8 +1246,7 @@ static HRESULT send(TS *t, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
         if (!cf) { r = 0; break; }
         if (RICH(t) && (wp & (SCF_SELECTION | SCF_WORD | SCF_ALL))) {
             if (wp & SCF_ALL) set_default_format(t, cf);
-            r = fmt_apply(t, (wp & SCF_ALL) ? 0 : selmin(t), (wp & SCF_ALL) ? t->len : selmax(t),
-                          cf->dwMask, cf->dwEffects, cf->crTextColor);
+            r = fmt_apply_cf(t, (wp & SCF_ALL) ? 0 : selmin(t), (wp & SCF_ALL) ? t->len : selmax(t), cf);
             break;
         }
         set_default_format(t, cf);
@@ -1354,11 +1399,11 @@ static void gdi_bar(void *ctx, LONG l, LONG tp, LONG r, LONG b)
     DeleteObject(br);
 }
 
-/* characters [a, b) of a line (@s as shown, @dx its widths) from x0, each
- * run in its format's font, colour, underline and strikethrough: @fg is
- * the automatic colour, or (@sel, over the selection's highlight) all of
- * them */
-static void draw_runs(TS *t, HDC dc, const WCHAR *s, const int *dx, LONG start, LONG a, LONG b, LONG x0, LONG y,
+/* characters [a, b) of a line (@s as shown, @dx its widths) from x0 on
+ * the baseline @base, each run in its format's font, colour, underline and
+ * strikethrough: @fg is the automatic colour, or (@sel, over the
+ * selection's highlight) all of them */
+static void draw_runs(TS *t, HDC dc, const WCHAR *s, const int *dx, LONG start, LONG a, LONG b, LONG x0, LONG base,
                       COLORREF fg, BOOL sel)
 {
     LONG i, j;
@@ -1366,14 +1411,17 @@ static void draw_runs(TS *t, HDC dc, const WCHAR *s, const int *dx, LONG start, 
         int f = fmt_at(t, start + i);
         LONG xa = x0 + (i ? dx[i - 1] : 0), xb;
         GDIBAR g;
+        int key = fmt_key(t, f);
+        LONG fh, fa;
         for (j = i + 1; j < b && fmt_at(t, start + j) == f; j++) ;
+        fmt_metrics(t, dc, key, &fh, &fa);
         xb = x0 + dx[j - 1];
         g.dc = dc;
         g.c = (sel || t->mono == 2) ? fg : fmt_color(t, f, fg);
-        SelectObject(dc, fmt_font(t, fmt_key(t, f)));
+        SelectObject(dc, fmt_font(t, key));
         SetTextColor(dc, g.c);
-        ExtTextOutW(dc, xa, y, 0, 0, s + i, (UINT)(j - i), 0);
-        fmt_decorate(t, fmt_effects(t, f), xa, xb, y, gdi_bar, &g);
+        ExtTextOutW(dc, xa, base - fa, 0, 0, s + i, (UINT)(j - i), 0);   /* (its top: on the line's baseline) */
+        fmt_decorate(t, key, fmt_effects(t, f), xa, xb, base, gdi_bar, &g);
     }
 }
 
@@ -1407,27 +1455,27 @@ static void draw(TS *t, HDC dc, const RECT *bounds)
     SetBkMode(dc, TRANSPARENT);
     for (i = 0; i < t->nlines; i++) {
         LINE *ln = &t->lines[i];
-        LONG y = rc.top + i * t->lineh - t->scrolly, n = ln->len, k, x0 = rc.left - t->scrollx + ln->shift;
+        LONG y = rc.top + ln->y - t->scrolly, n = ln->len, k, x0 = rc.left - t->scrollx + ln->shift;
         WCHAR stackbuf[256], *s = stackbuf;
         int *dx = 0;
-        if (y + t->lineh <= rc.top || y >= rc.bottom) continue;
+        if (y + ln->h <= rc.top || y >= rc.bottom) continue;
         if (n > 256) s = alloc(n * sizeof(WCHAR));
         if (n && !(dx = alloc(n * sizeof(int)))) { if (s != stackbuf) release(s); continue; }
         for (k = 0; k < n; k++) s[k] = shown(t, ln->start + k) == L'\t' ? L' ' : shown(t, ln->start + k);
         if (n) measure(t, dc, ln->start, n, dx, 0);
-        draw_runs(t, dc, s, dx, ln->start, 0, n, x0, y, fg, FALSE);
+        draw_runs(t, dc, s, dx, ln->start, 0, n, x0, y + ln->asc, fg, FALSE);
         /* the selected part again, over its highlight */
         if (showsel && smin < smax && smax > ln->start && smin <= ln->start + n) {
             LONG a = smin > ln->start ? smin - ln->start : 0, b = smax < ln->start + n ? smax - ln->start : n;
             BOOL eol = smax > ln->start + n && i + 1 < t->nlines;   /* (the paragraph mark) */
             LONG xa = x0 + (a ? dx[a - 1] : 0);
-            LONG xb = x0 + (b ? dx[b - 1] : 0) + (eol ? t->lineh / 3 : 0);
+            LONG xb = x0 + (b ? dx[b - 1] : 0) + (eol ? ln->h / 3 : 0);
             RECT sr;
             HBRUSH br = CreateSolidBrush(selbg);
-            SetRect(&sr, xa, y, xb, y + t->lineh);
+            SetRect(&sr, xa, y, xb, y + ln->h);
             FillRect(dc, &sr, br);
             DeleteObject(br);
-            draw_runs(t, dc, s, dx, ln->start, a, b, x0, y, selfg, TRUE);
+            draw_runs(t, dc, s, dx, ln->start, a, b, x0, y + ln->asc, selfg, TRUE);
         }
         release(dx);
         if (s != stackbuf) release(s);
@@ -1546,7 +1594,7 @@ static HRESULT TXAPI ts_baseline(ITextServices2 *me, LONG *pos)
     TS *t = FROM_IFACE(me);
     if (!pos) return E_INVALIDARG;
     ensure_layout(t);
-    *pos = t->ascent;
+    *pos = t->nlines ? t->lines[0].asc : t->ascent;
     return S_OK;
 }
 
@@ -1564,8 +1612,8 @@ static HRESULT natural(TS *t, HDC hdc, DWORD mode, LONG *width, LONG *height, LO
     put_dc(t, hdc, host);
     for (i = 0; i < t->nlines; i++) if (t->lines[i].width + t->lines[i].pad > maxw) maxw = t->lines[i].width + t->lines[i].pad;
     *width = maxw + 1;                            /* (room for the caret) */
-    *height = t->nlines * t->lineh;
-    if (ascent) *ascent = t->ascent;
+    *height = t->nlines ? t->lines[t->nlines - 1].y + t->lines[t->nlines - 1].h : t->lineh;
+    if (ascent) *ascent = t->nlines ? t->lines[0].asc : t->ascent;
     t->dirty = TRUE;                              /* (the next draw lays out for its own width) */
     return S_OK;
 }
@@ -1624,7 +1672,7 @@ static HRESULT TXAPI ts_cached(ITextServices2 *me, DWORD *width, DWORD *height)
     ensure_layout(t);
     for (i = 0; i < t->nlines; i++) if (t->lines[i].width + t->lines[i].pad > maxw) maxw = t->lines[i].width + t->lines[i].pad;
     if (width) *width = (DWORD)maxw;
-    if (height) *height = (DWORD)(t->nlines * t->lineh);
+    if (height) *height = (DWORD)(t->nlines ? t->lines[t->nlines - 1].y + t->lines[t->nlines - 1].h : t->lineh);
     return S_OK;
 }
 

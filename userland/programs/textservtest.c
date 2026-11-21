@@ -42,7 +42,7 @@ typedef struct {
     RECT client;
     CHARFORMATW cf;
     PARAFORMAT pf;
-    int changes, textchanges, selchanges, maxtext, carets, caretshown, focusreq, capture;
+    int changes, textchanges, selchanges, maxtext, carets, caretshown, focusreq, capture, careth;
     CHARRANGE lastsel;
     POINT caret;
     HDC dc;                                     /* TxGetDC's */
@@ -76,7 +76,7 @@ static BOOL TXAPI h_sbrange(ITextHost2 *me, INT b, LONG mn, INT mx, BOOL r) { (v
 static BOOL TXAPI h_sbpos(ITextHost2 *me, INT b, INT p, BOOL r) { (void)me; (void)b; (void)p; (void)r; return TRUE; }
 static void TXAPI h_invalidate(ITextHost2 *me, LPCRECT rc, BOOL m) { (void)me; (void)rc; (void)m; }
 static void TXAPI h_viewchange(ITextHost2 *me, BOOL u) { (void)me; (void)u; }
-static BOOL TXAPI h_createcaret(ITextHost2 *me, HBITMAP b, INT w, INT h) { (void)b; (void)w; (void)h; H(me)->carets++; return TRUE; }
+static BOOL TXAPI h_createcaret(ITextHost2 *me, HBITMAP b, INT w, INT h) { (void)b; (void)w; H(me)->careth = h; H(me)->carets++; return TRUE; }
 static BOOL TXAPI h_showcaret(ITextHost2 *me, BOOL s) { H(me)->caretshown = s; return TRUE; }
 static BOOL TXAPI h_caretpos(ITextHost2 *me, INT x, INT y) { H(me)->caret.x = x; H(me)->caret.y = y; return TRUE; }
 static BOOL TXAPI h_settimer(ITextHost2 *me, UINT id, UINT t) { (void)me; (void)id; (void)t; return TRUE; }
@@ -1323,6 +1323,7 @@ static void alignment(HDC dc)
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_PARAFORMATCHANGE, TXTBIT_PARAFORMATCHANGE);
     host.pf.dwMask = 0;
     msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.client.bottom = BH;
     host.bits = bits;
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
 }
@@ -1472,6 +1473,159 @@ static void indents(HDC dc)
     ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE | TXTBIT_WORDWRAP, host.bits);
 }
 
+/* ---- fonts of their own sizes and faces (XAML text input, part 9) ------- */
+static LONG y_at(LONG cp)
+{
+    POINTL pt = {-1, -1};
+    msg(EM_POSFROMCHAR, (WPARAM)&pt, cp);
+    return pt.y;
+}
+static CHARFORMAT2W format_of(LONG a, LONG b)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cf.cbSize = sizeof(cf);
+    set_sel(a, b);
+    msg(EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    return cf;
+}
+static LRESULT set_font(LONG a, LONG b, DWORD mask, LONG twips, const WCHAR *face)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cf.cbSize = sizeof(cf);
+    cf.cf.dwMask = mask;
+    cf.cf.yHeight = twips;
+    if (face) wcscpy(cf.cf.szFaceName, face);
+    set_sel(a, b);
+    return msg(EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+static void fonts(HDC dc)
+{
+    static const IID iid_doc2_ = NOVA_IID_ITextDocument2;
+    static const IID iid_wdoc = {0x1149d57d, 0x86a6, 0x59dd, {0x88, 0xd9, 0x19, 0x6f, 0x27, 0xbc, 0x5c, 0x85}};
+    DWORD bits = host.bits;
+    ITextDocument2 *d = 0;
+    ITextRange2 *r = 0;
+    IUnknown *font = 0, *doc = 0, *wr = 0, *wcf = 0;
+    CHARFORMAT2W cf;
+    LONG y1, y2, w = 0, h = 0, h2 = 0, smallh, bigh;
+    float sz = -1;
+    BSTR name = 0;
+    HSTRING hs = 0;
+    int dark;
+
+    host.client.bottom = 100;                     /* (room for both lines: no scrolling) */
+    host.bits |= TXTBIT_RICHTEXT | TXTBIT_MULTILINE;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
+    y1 = y_at(3);
+    ts->lpVtbl->TxGetNaturalSize(ts, DVASPECT_CONTENT, 0, 0, 0, TXTNS_FITTOCONTENT, 0, &w, &h);
+    check("two lines of the default font, one height", y1 > 8 && h == 2 * y1);
+    set_sel(0, 0);
+    draw(dc);
+    dark = count_dark();
+    cf = format_of(0, 2);
+    check("EM_GETCHARFORMAT: the default's size and face", (cf.cf.dwMask & (CFM_SIZE | CFM_FACE)) == (CFM_SIZE | CFM_FACE)
+          && cf.cf.yHeight == 180 && !wcscmp(cf.cf.szFaceName, L"Segoe UI"));
+    check("EM_SETCHARFORMAT(CFM_SIZE) 18 points on \"ab\"", set_font(0, 2, CFM_SIZE, 360, 0) != 0);
+    cf = format_of(0, 2);
+    check("... EM_GETCHARFORMAT gives it", (cf.cf.dwMask & CFM_SIZE) && cf.cf.yHeight == 360);
+    cf = format_of(3, 5);
+    check("... \"cd\" keeps the default's", (cf.cf.dwMask & CFM_SIZE) && cf.cf.yHeight == 180);
+    cf = format_of(0, 5);
+    check("... over both: the size undefined (CFM_SIZE clear), the face the same", !(cf.cf.dwMask & CFM_SIZE) && (cf.cf.dwMask & CFM_FACE));
+    y2 = y_at(3);
+    check("the first line is as tall as its bigger font: the second moves down", y2 >= 2 * y1 - 4 && y2 <= 2 * y1 + 6);
+    ts->lpVtbl->TxGetNaturalSize(ts, DVASPECT_CONTENT, 0, 0, 0, TXTNS_FITTOCONTENT, 0, &w, &h2);
+    if (h2 != y2 + y1) printf("  natural height %ld\n", (long)h2);
+    check("TxGetNaturalSize: the lines' heights added up", h2 == y2 + y1);
+    set_sel(0, 0);
+    draw(dc);
+    check("the bigger characters are drawn bigger", count_dark() > dark + 20);
+    msg(WM_SETFOCUS, 0, 0);
+    set_sel(1, 1);
+    bigh = host.careth;
+    set_sel(4, 4);
+    smallh = host.careth;
+    if (bigh != y2 || smallh != y1 || host.caret.y != y2) printf("  carets %ld %ld at %ld\n", (long)bigh, (long)smallh, (long)host.caret.y);
+    check("the caret is as tall as its line", bigh == y2 && smallh == y1 && host.caret.y == y2);
+    msg(WM_KILLFOCUS, 0, 0);
+    check("EM_CHARFROMPOS in the second line, below the first's height", msg(EM_CHARFROMPOS, 0, (LPARAM)&(POINTL){1, y2 + 2}) == 3);
+    set_sel(2, 2);
+    type(L"Z");
+    check("typing after \"ab\": the bigger size", text_is(L"abZ\rcd") && format_of(2, 3).cf.yHeight == 360);
+    ctrl_key('Z');
+    check("Ctrl+Z", text_is(L"ab\rcd"));
+    set_font(0, 2, CFM_SIZE, 180, 0);
+    check("back to the default's size: one height again", y_at(3) == y1);
+    check("EM_SETCHARFORMAT(CFM_FACE) on \"cd\"", set_font(3, 5, CFM_FACE, 0, L"Courier New") != 0);
+    cf = format_of(3, 5);
+    check("... EM_GETCHARFORMAT gives its face", (cf.cf.dwMask & CFM_FACE) && !wcscmp(cf.cf.szFaceName, L"Courier New"));
+    cf = format_of(0, 5);
+    check("... over both: the face undefined (CFM_FACE clear)", !(cf.cf.dwMask & CFM_FACE) && (cf.cf.dwMask & CFM_SIZE));
+    ctrl_key('Z');
+    check("Ctrl+Z undoes a face", !wcscmp(format_of(3, 5).cf.szFaceName, L"Segoe UI"));
+    /* the Text Object Model's font: Get/SetSize in points, Get/SetName */
+    ts->lpVtbl->QueryInterface(ts, &iid_doc2_, (void **)&d);
+    if (d) d->lpVtbl->Range2(d, 3, 5, &r);
+    if (r) r->lpVtbl->GetFont(r, (void **)&font);
+    if (font) {
+        FSLOT(font, 40, HRESULT (STDMETHODCALLTYPE *)(void *, float))(font, 24.0f);   /* SetSize */
+        FSLOT(font, 39, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(font, &sz);   /* GetSize */
+        check("ITextFont.SetSize(24), GetSize", sz == 24.0f && format_of(3, 5).cf.yHeight == 480 && format_of(0, 2).cf.yHeight == 180);
+        check("... the first line keeps its height", y_at(3) == y1 && y_at(5) == y1);
+        FSLOT(font, 30, HRESULT (STDMETHODCALLTYPE *)(void *, BSTR))(font, L"Consolas");   /* SetName */
+        FSLOT(font, 29, HRESULT (STDMETHODCALLTYPE *)(void *, BSTR *))(font, &name);       /* GetName */
+        check("ITextFont.SetName, GetName", name && !wcscmp(name, L"Consolas") && !wcscmp(format_of(3, 5).cf.szFaceName, L"Consolas"));
+        SysFreeString(name);
+        name = 0;
+        r->lpVtbl->SetRange(r, 0, 5);
+        sz = 0;
+        FSLOT(font, 39, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(font, &sz);
+        FSLOT(font, 29, HRESULT (STDMETHODCALLTYPE *)(void *, BSTR *))(font, &name);
+        check("... live: over both lines the size is tomUndefined and the name empty", sz == (float)tomUndefined && name && !name[0]);
+        SysFreeString(name);
+        check("ITextFont.SetSize(0) is refused", FSLOT(font, 40, HRESULT (STDMETHODCALLTYPE *)(void *, float))(font, 0.0f) == E_INVALIDARG);
+        font->lpVtbl->Release(font);
+    } else check("ITextRange.GetFont", 0);
+    if (r) r->lpVtbl->Release(r);
+    if (d) d->lpVtbl->Release(d);
+    /* the Windows Runtime's: ITextCharacterFormat.Size and Name */
+    ts->lpVtbl->QueryInterface(ts, &iid_wdoc, (void **)&doc);
+    if (doc) WSLOT(doc, 17, HRESULT (STDMETHODCALLTYPE *)(void *, INT32, INT32, void **))(doc, 0, 2, (void **)&wr);
+    if (wr) WSLOT(wr, 2, HRESULT (STDMETHODCALLTYPE *)(void *, void **))(wr, (void **)&wcf);   /* get_CharacterFormat */
+    if (wcf && p_hcreate) {
+        sz = 0;
+        WSLOT(wcf, 30, HRESULT (STDMETHODCALLTYPE *)(void *, float))(wcf, 15.0f);               /* put_Size */
+        WSLOT(wcf, 29, HRESULT (STDMETHODCALLTYPE *)(void *, float *))(wcf, &sz);               /* get_Size */
+        check("ITextCharacterFormat.Size = 15", sz == 15.0f && format_of(0, 2).cf.yHeight == 300);
+        p_hcreate(L"Georgia", 7, &hs);
+        WSLOT(wcf, 22, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING))(wcf, hs);                /* put_Name */
+        p_hdelete(hs);
+        hs = 0;
+        WSLOT(wcf, 21, HRESULT (STDMETHODCALLTYPE *)(void *, HSTRING *))(wcf, &hs);             /* get_Name */
+        check("ITextCharacterFormat.Name = Georgia", hs && !wcscmp(p_hbuffer(hs, 0), L"Georgia")
+              && !wcscmp(format_of(0, 2).cf.szFaceName, L"Georgia"));
+        if (hs) p_hdelete(hs);
+        wcf->lpVtbl->Release(wcf);
+    } else check("ITextRange.CharacterFormat", 0);
+    if (wr) wr->lpVtbl->Release(wr);
+    if (doc) doc->lpVtbl->Release(doc);
+    /* plain text: one format, so a selection's size is the whole text's */
+    host.bits &= ~TXTBIT_RICHTEXT;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT, host.bits);
+    msg(WM_SETTEXT, 0, (LPARAM)L"ab\r\ncd");
+    set_font(0, 1, CFM_SIZE, 360, 0);
+    check("plain text: a selection's size is every line's", format_of(4, 5).cf.yHeight == 360 && y_at(3) >= 2 * y1 - 4);
+    set_font(0, 1, CFM_SIZE, 180, 0);
+    check("... and back", y_at(3) == y1);
+    msg(WM_SETTEXT, 0, (LPARAM)L"");
+    host.client.bottom = BH;
+    host.bits = bits;
+    ts->lpVtbl->OnTxPropertyBitsChange(ts, TXTBIT_RICHTEXT | TXTBIT_MULTILINE, host.bits);
+}
+
 int main(void)
 {
     HMODULE m = LoadLibraryW(L"WinUIEdit.dll");
@@ -1517,6 +1671,7 @@ int main(void)
     formatting(dc);
     alignment(dc);
     indents(dc);
+    fonts(dc);
     drawd2d(dc);
     others();
 

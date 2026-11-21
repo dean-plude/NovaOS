@@ -896,6 +896,20 @@ vendors.
      left indent being the lines' after the first) and
      `ITextParagraphFormat` (`FirstLineIndent`, `LeftIndent`,
      `RightIndent`, `SetIndents`) reach them.
+     Font sizes and faces per character (part 9) are two more properties
+     of a character's format (`RUNFMT.size` in twips, `RUNFMT.face`).
+     Each distinct face, size, bold and italic in use is a font key
+     (`TS.fkeys`, key 0 the default's; `fmt_key`), with its GDI font or
+     the host's DirectWrite face (asked of `IProvideFontInfo` by the
+     key's face name) and its height and ascent (`fmt_metrics`).  Layout
+     gives each line a top, height and baseline (`LINE.y`, `h`, `asc`)
+     from its characters' and its mark's keys, every run is drawn on the
+     line's baseline, and the caret (recreated when its line's height
+     changes), hits, scrolling, `EM_POSFROMCHAR`, TOM's `GetPoint` and
+     the natural size use the line tops.  `EM_SETCHARFORMAT`
+     (`CFM_SIZE`, `CFM_FACE`), TOM's `ITextFont` (`Set/GetSize`,
+     `Set/GetName`) and `ITextCharacterFormat` (`Size`, `Name`) reach
+     them.
 5. **32.5 WinUI 2.** The `controls` tree as `Microsoft.UI.Xaml.dll` 2.x on
    top of the system XAML, with its `.pri` resources.
    - *First part, the framework under its Windows names.*  WinUI 2 (the

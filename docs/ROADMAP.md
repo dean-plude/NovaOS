@@ -1283,7 +1283,9 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `RichEditBox` per paragraph from Ctrl+L, E, R and J and from its
   `Document`'s `ParagraphFormat`; and indents (the first line's, the
   others' and the right's, so hanging indents too) from
-  `ParagraphFormat.SetIndents`.
+  `ParagraphFormat.SetIndents`.  Since 11-21 a `RichEditBox`'s characters
+  can have their own font size and face (`CharacterFormat.Size` and
+  `Name`), each line as tall as its tallest text.
 - [x] **32.5 WinUI 2.** `Microsoft.UI.Xaml.dll` 2.x on the system XAML.
   First part done: the framework under its `Windows.UI.Xaml` names,
   which WinUI 2 and UWP apps are compiled against.  `tools/winrt/winfaces.py`

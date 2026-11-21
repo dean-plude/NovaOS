@@ -172,10 +172,23 @@ static HRESULT STDMETHODCALLTYPE c_get_Name(void *me, HSTRING *value)
     SysFreeString(b);
     return hr;
 }
+static HRESULT STDMETHODCALLTYPE c_put_Name(void *me, HSTRING value)
+{
+    BSTR b = hstring_bstr(value);
+    HRESULT hr;
+    if (!b) return E_OUTOFMEMORY;
+    hr = FONT(me, F_GETNAME + 1, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, BSTR))(W(me)->tom, b);
+    SysFreeString(b);
+    return hr;
+}
 static HRESULT STDMETHODCALLTYPE c_get_Size(void *me, float *value)
 {
     if (!value) return E_POINTER;
     return FONT(me, F_GETSIZE, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, float *))(W(me)->tom, value);
+}
+static HRESULT STDMETHODCALLTYPE c_put_Size(void *me, float value)
+{
+    return FONT(me, F_GETSIZE + 1, HRESULT (STDMETHODCALLTYPE *)(IUnknown *, float))(W(me)->tom, value);
 }
 
 /* Underline: UnderlineType (Undefined 0, None 1, Single 2, the others drawn as Single) */
@@ -252,11 +265,11 @@ static const VFN wcf_vtbl[] = {
     (VFN)c_get_zero, (VFN)c_put_float,                     /* Kerning */
     (VFN)c_get_empty, (VFN)c_put_string,                   /* LanguageTag */
     (VFN)c_get_LinkType,
-    (VFN)c_get_Name, (VFN)c_put_string,                    /* Name (the default's) */
+    (VFN)c_get_Name, (VFN)c_put_Name,                      /* Name (each character's: part 9) */
     (VFN)c_get_off, (VFN)c_put_none,                       /* Outline */
     (VFN)c_get_zero, (VFN)c_put_float,                     /* Position */
     (VFN)c_get_off, (VFN)c_put_none,                       /* ProtectedText */
-    (VFN)c_get_Size, (VFN)c_put_float,                     /* Size (the default's) */
+    (VFN)c_get_Size, (VFN)c_put_Size,                      /* Size (each character's: part 9) */
     (VFN)c_get_off, (VFN)c_put_none,                       /* SmallCaps */
     (VFN)c_get_zero, (VFN)c_put_float,                     /* Spacing */
     (VFN)c_get_Strikethrough, (VFN)c_put_Strikethrough,

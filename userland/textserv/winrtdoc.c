@@ -69,6 +69,7 @@ static BSTR to_bstr(HSTRING h)
     const WCHAR *s = (h && strings()) ? p_buffer(h, &n) : L"";
     return SysAllocStringLen(s, n);
 }
+BSTR hstring_bstr(HSTRING h) { return to_bstr(h); }
 
 /* a BSTR as an HSTRING, freeing the BSTR; (UseLf: paragraph marks as \n) */
 static HRESULT bstr_out(BSTR b, BOOL lf, HSTRING *out)

@@ -39,7 +39,8 @@
  * the hub's completion DPC would.  An IN transfer the device has no data
  * for waits on its pipe (others are not held up); aborting the pipe or
  * cancelling the IRP ends it.  Interrupt pipes run as bulk ones do (on
- * xHCI, which treats both alike).
+ * xHCI, which treats both alike), and on both an IN transfer that times
+ * out between polls stays queued for the next one.
  *
  * Isochronous IN (a USB camera's stream, usbvideo.c, or a Windows
  * client's): the first ISOCH_TRANSFER URB on a pipe starts the core's
@@ -647,7 +648,13 @@ static UINT32 fill_iface(UsbdDev *v, UsbdIfaceInfo *info)
             up = UsbOpenPipe(d, e, PIPE_BUF);
             if (!up) return USBD_STATUS_NOT_SUPPORTED;
             up->patient = true;
-            up->keep = up->xfer == 3;                            /* interrupt: as on Windows, a transfer stays queued */
+            /* an IN transfer that waits a second with no data stays
+             * queued for the next poll, as on Windows, rather than be
+             * taken back with Stop Endpoint: data that lands just then
+             * is lost (QEMU's usb-redir drops it, a real controller
+             * reports it as stopped), as a Bluetooth radio's first ACL
+             * packet after a quiet spell was */
+            up->keep = up->xfer == 3 || (up->xfer == 2 && (e[2] & 0x80));
         }
         UsbdPipe *p = v->pipes[idx];
         if (!p) {

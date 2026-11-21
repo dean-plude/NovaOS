@@ -2071,5 +2071,27 @@ vendors.
    vendored yet).  Test: `wuxamltest` (a `HyperlinkButton` from markup,
    its `NavigateUri`'s host read back).
 
+   Pulsar item 3, thirty-first slice: the formatted text.  Calculator's
+   page words some of its text as a `Span` or `Hyperlink` of `Run`s,
+   whose inline collection is made over `CTextElementCollection`, whose
+   constructor was an unbuilt stand-in.  Vendored and built from
+   microsoft-ui-xaml 866ba81 into the core's text library:
+   `core/text/RichTextArea/TextElementCollection.cpp` (the collection,
+   which checks each element it takes and marks its owner's text
+   dirty), `TextElement.cpp` (`CTextElement`, the base of every inline:
+   its inherited text formatting, dirty marking and access keys) and
+   `TextSchema.cpp` (`CTextSchema`, which says which elements a text
+   block, a span or a link may hold; unbuilt, its answer of "not
+   implemented" made the collection refuse every element).  The
+   framework's own `Span`, `Run`, `Hyperlink` and `InlineCollection`
+   classes (`dxaml/lib`) are not built yet: the core's elements work
+   without them until code reads a text block's `Inlines`.  Calculator's
+   page now loads and reaches its first layout pass, where it stops: a
+   WinUI 2 control's `MeasureOverride` calls its `Windows.UI.Xaml` base
+   class's `IFrameworkElementOverrides::MeasureOverride`, which answers
+   `E_NOTIMPL`, and the unhandled error ends the app.  Test: `wuxamltest`
+   (a `TextBlock` from markup whose `Span` holds a `Run` and a
+   `Hyperlink`).
+
 Out-of-process WinRT servers, the app container sandbox and the
 .NET Native/UWP .NET runtime are later work.

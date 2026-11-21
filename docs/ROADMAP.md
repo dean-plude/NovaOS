@@ -1715,6 +1715,14 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   next at a `HyperlinkButton`, which NovaOS does not build yet.  Next:
   `HyperlinkButton`, then the CI check that Calculator computes `2 + 2`,
   which ticks this step.
+  Thirty-sixth part done (Pulsar item 3, thirtieth slice): the
+  framework's `HyperlinkButton`, with its automation peer, the launcher
+  a clicked link opens through and the core's `CHyperlink` (the link
+  underline setting), built for Calculator's links.  Test `wuxamltest`.
+  Calculator's page gets past its link buttons and stops next at the
+  core's text element collection (`CTextElementCollection`), which NovaOS
+  does not build yet.  Next: the text element collection, then the CI
+  check that Calculator computes `2 + 2`, which ticks this step.
 
 ---
 

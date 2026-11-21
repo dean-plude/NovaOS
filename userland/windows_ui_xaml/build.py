@@ -1838,6 +1838,20 @@ COMPONENT_INCLUDES.append('components/moco/inc')
 _MOCO = 'components/moco/lib/Microsoft.UI.Xaml.Components.Moco.vcxproj'
 CORE_LIBRARIES.append((_MOCO, _MOCO, 'components/pch/precomp.h', []))
 CORE_SOURCES[_MOCO] = ('LayoutStrategyBase.cpp', 'StackingLayoutStrategyImpl.cpp')
+# (step 32.6, the links a page shows as buttons, Calculator's (Pulsar item
+# 3, slice 30): the HyperlinkButton, over ButtonBase, which underlines its
+# text as the HyperlinkUnderlineVisible theme resource says (the core's
+# CHyperlink, core/text/TextBlock/Hyperlink.cpp, reads it) and opens its
+# NavigateUri through Windows.System.Launcher (dxaml/lib/Launcher.cpp) when
+# clicked, with its automation peer, each its generated class and its
+# partial one)
+_HYPERLINK_BUTTON = ('HyperlinkButton', 'HyperlinkButtonAutomationPeer')
+CORE_SOURCES['dxaml/lib/winrtfoundation/wrtdxamlfoundation.vcxproj'] += (
+    '../HyperLinkButton_Partial.cpp', '../HyperlinkButtonAutomationPeer_Partial.cpp', '../Launcher.cpp') + tuple(
+    '../winrtgeneratedclasses/%s.g.cpp' % x for x in _HYPERLINK_BUTTON)
+CORE_SOURCES[_CORETEXT] += ('TextBlock/Hyperlink.cpp',)
+# (whose launch names IAsyncInfo bare, as the Windows SDK lets it)
+FILE_FIRST['Launcher.cpp'] = ('nova_async_info.h',)
 # (step 32.6, a page's text boxes (XAML text input, part 3): the core's
 # text controls library, core/native/text/Controls: the text box base,
 # CTextBoxBase, which hosts the windowless Rich Edit (NovaOS's

@@ -949,6 +949,14 @@ static void text_elements_checks()
     ctl::ComPtr<wuxc::ITextBlock> block;
     CHECK("a TextBlock with a Span of a Run and a Hyperlink from markup", SUCCEEDED(hr) && blockObject &&
           SUCCEEDED(blockObject.As(&block)));
+    /* its Text set replaces its inlines, clearing its selection first
+     * (TextSelectionManager::Destroy, which failed the layout of
+     * Calculator's page while it was not built) */
+    HSTRING text = nullptr;
+    CHECK("its Text set over its inlines, then read back", block &&
+          SUCCEEDED(block->put_Text(wrl_wrappers::HStringReference(L"Plain").Get())) &&
+          SUCCEEDED(block->get_Text(&text)) && is(text, L"Plain"));
+    WindowsDeleteString(text);
 }
 
 /* a LinearGradientBrush from markup, as Calculator's page paints with: its

@@ -1736,6 +1736,16 @@ as `Windows.UI.Xaml.dll`, then WinUI 2 and app packages.  See
   `MeasureOverride` and gets "not implemented".  Next: that base class
   measure, then the CI check that Calculator computes `2 + 2`, which
   ticks this step.
+  Thirty-eighth part done (Pulsar item 3, thirty-second slice): the
+  core's text selection manager (`TextSelectionManager`), built so that
+  a text block whose `Text` replaces its inlines can clear its (empty)
+  selection; unbuilt, its "not implemented" failed a text block's
+  measure under WinUI 2's `NavigationView` and with it the page's first
+  layout pass.  Test `wuxamltest`.  Calculator's first layout pass now
+  runs on until a brush transition's duration
+  (`CBrushTransition::GetDuration`), which NovaOS does not build yet.
+  Next: the brush transition, then the CI check that Calculator
+  computes `2 + 2`, which ticks this step.
 
 ---
 
